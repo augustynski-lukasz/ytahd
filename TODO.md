@@ -121,6 +121,7 @@ FEAT-018 — Move reusable core functionality into dedicated library project
 FEAT-019 — Add shared application service layer in core for CLI/GUI/Web hosts
 
 - Status: completed
+- Done: 2026-08-28 (commit 8155500)
 
 Notes:
 
