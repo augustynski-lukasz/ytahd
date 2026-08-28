@@ -76,5 +76,59 @@ namespace YTAHD.Tests
                 File.Delete(tmpOut);
             }
         }
+
+        [Fact]
+        public async Task DecodeFromRgbStream_Throws_When_FrameHashInvalid()
+        {
+            var tmpIn = Path.GetTempFileName();
+            var tmpOut = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[16];
+                new Random(42).NextBytes(data);
+                await File.WriteAllBytesAsync(tmpIn, data);
+
+                const int width = 128;
+                const int height = 64;
+                const int macroblock = 1;
+                const int headerBytes = 2 + 1 + 4 + 2 + 32;
+
+                var mod = new BinaryGridModulator();
+                var fake = new FakeFFmpegWrapper(width, height, 30);
+                var encoder = new EncoderEngine(mod, fake, macroblock, width, height, 30);
+                await encoder.EncodeAsync(tmpIn, "out.mp4");
+
+                var raw = fake.Process?.Buffer?.ToArray();
+                Assert.NotNull(raw);
+
+                int frameBytes = width * height * 3;
+                int bitIndex = headerBytes * 8; // first payload bit in packet
+                int bx = bitIndex % width;
+                int by = bitIndex / width;
+                int pixelOffsetInFrame = by * width * 3 + bx * 3;
+
+                // Corrupt the same bit across all 3 repeated copies of the first logical frame.
+                for (int rep = 0; rep < 3; rep++)
+                {
+                    int idx = rep * frameBytes + pixelOffsetInFrame;
+                    raw[idx] = raw[idx] > 128 ? (byte)0 : (byte)255;
+                }
+
+                using var corruptedStream = new MemoryStream(raw, writable: false);
+                var decoder = new DecoderEngine(mod, fake);
+
+                var ex = await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                    await decoder.DecodeFromRgbStreamAsync(corruptedStream, width, height, macroblock, data.Length, tmpOut));
+
+                Assert.True(
+                    ex.Message.Contains("Missing frame index", StringComparison.Ordinal) ||
+                    ex.Message.Contains("incomplete", StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                File.Delete(tmpIn);
+                File.Delete(tmpOut);
+            }
+        }
     }
 }

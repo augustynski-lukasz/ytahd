@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using YTAHD.Cli.Modulation;
 using YTAHD.Cli.Infrastructure;
@@ -114,19 +115,29 @@ namespace YTAHD.Cli.Core
 
                 int frameIndex = (packet[3] << 24) | (packet[4] << 16) | (packet[5] << 8) | packet[6];
                 int payloadLength = (packet[7] << 8) | packet[8];
-                if (frameIndex < 0 || payloadLength < 0)
+                if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
                 {
                     return;
                 }
 
-                int clampedLen = Math.Min(payloadLength, payloadBytesPerFrame);
                 int availablePayload = Math.Max(0, packet.Length - HeaderBytes);
-                clampedLen = Math.Min(clampedLen, availablePayload);
-
-                var payload = new byte[clampedLen];
-                if (clampedLen > 0)
+                if (payloadLength > availablePayload)
                 {
-                    Buffer.BlockCopy(packet, HeaderBytes, payload, 0, clampedLen);
+                    return;
+                }
+
+                var payload = new byte[payloadLength];
+                if (payloadLength > 0)
+                {
+                    Buffer.BlockCopy(packet, HeaderBytes, payload, 0, payloadLength);
+                }
+
+                // FEAT-015: validate per-frame SHA-256 before accepting payload.
+                var expectedHash = new ReadOnlySpan<byte>(packet, 9, 32);
+                var actualHash = SHA256.HashData(payload);
+                if (!actualHash.AsSpan().SequenceEqual(expectedHash))
+                {
+                    return;
                 }
 
                 orderedPayload[frameIndex] = payload;
@@ -195,11 +206,17 @@ namespace YTAHD.Cli.Core
 
             var outBuf = new byte[expectedOutputBytes];
             int written = 0;
+            int expectedFrameIndex = 0;
             foreach (var kv in orderedPayload)
             {
                 if (written >= expectedOutputBytes)
                 {
                     break;
+                }
+
+                if (kv.Key != expectedFrameIndex)
+                {
+                    throw new InvalidDataException($"Missing frame index {expectedFrameIndex}. Frame may be lost or failed hash verification.");
                 }
 
                 var payload = kv.Value;
@@ -209,6 +226,13 @@ namespace YTAHD.Cli.Core
                     Buffer.BlockCopy(payload, 0, outBuf, written, toCopy);
                     written += toCopy;
                 }
+
+                expectedFrameIndex++;
+            }
+
+            if (written < expectedOutputBytes)
+            {
+                throw new InvalidDataException("Decoded payload is incomplete. Frames may be missing or invalid.");
             }
 
             await File.WriteAllBytesAsync(outputFile, outBuf);
