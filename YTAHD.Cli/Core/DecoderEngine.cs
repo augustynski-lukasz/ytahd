@@ -51,7 +51,7 @@ namespace YTAHD.Cli.Core
             var bits = new System.Collections.Generic.List<int>(expectedOutputBytes * 8);
 
             byte[] frameBuf = new byte[frameBytes];
-            byte[] prevFrame = null;
+            int frameOrdinal = 0;
 
             while (true)
             {
@@ -65,12 +65,11 @@ namespace YTAHD.Cli.Core
 
                 if (read < frameBytes) break; // end
 
-                // Skip duplicate repeated frames (encoder repeats frames 3x)
-                if (prevFrame != null)
+                // Encoder repeats each payload frame exactly 3 times. Keep the first and skip the next two.
+                if ((frameOrdinal % 3) != 0)
                 {
-                    bool same = true;
-                    for (int i = 0; i < frameBytes; i++) { if (prevFrame[i] != frameBuf[i]) { same = false; break; } }
-                    if (same) continue;
+                    frameOrdinal++;
+                    continue;
                 }
 
                 // sample macroblocks
@@ -87,9 +86,7 @@ namespace YTAHD.Cli.Core
                     }
                 }
 
-                // copy current to prev
-                prevFrame ??= new byte[frameBytes];
-                Buffer.BlockCopy(frameBuf, 0, prevFrame, 0, frameBytes);
+                frameOrdinal++;
 
                 if (bits.Count >= expectedOutputBytes * 8) break;
             }

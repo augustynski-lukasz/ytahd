@@ -76,7 +76,8 @@ FEAT-011 — Implement Phase 2/3 advanced modulation modes (multi-channel/QAM-li
 
 FEAT-012 — Add CI pipeline (GitHub Actions) to run `dotnet test`
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-28 (commit d50a795a4cc717ec9f67da1e8988904f200b77b1)
 
 FEAT-013 — Tag v0.1.0 and push to remote (release prep)
 
