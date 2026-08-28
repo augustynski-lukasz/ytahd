@@ -12,7 +12,10 @@ namespace YTAHD.Cli.Core
     {
         private const int FrameMagic = 0x5954; // 'YT'
         private const byte FrameVersion = 1;
-        private const int HeaderBytes = 2 + 1 + 4 + 2 + 32;
+        private const byte FrameTypeData = 0;
+        private const byte FrameTypeParity = 1;
+        // magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen + sha256
+        private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
 
         private readonly IModulator _modulator;
         private readonly YTAHD.Cli.Infrastructure.IFFmpegWrapper _ffmpeg;
@@ -60,6 +63,9 @@ namespace YTAHD.Cli.Core
             int frameBytes = rowBytes * height;
 
             var orderedPayload = new SortedDictionary<int, byte[]>();
+            var parityPayloadByGroup = new Dictionary<int, byte[]>();
+            var groupCountByGroup = new Dictionary<int, int>();
+            int totalDataFrames = -1;
 
             const int repeatedFrameCount = 3;
             byte[] frameBuf = new byte[frameBytes];
@@ -108,16 +114,29 @@ namespace YTAHD.Cli.Core
 
                 int magic = (packet[0] << 8) | packet[1];
                 byte version = packet[2];
+                byte frameType = packet[3];
                 if (magic != FrameMagic || version != FrameVersion)
                 {
                     return;
                 }
 
-                int frameIndex = (packet[3] << 24) | (packet[4] << 16) | (packet[5] << 8) | packet[6];
-                int payloadLength = (packet[7] << 8) | packet[8];
+                int frameIndex = (packet[4] << 24) | (packet[5] << 16) | (packet[6] << 8) | packet[7];
+                int declaredTotalFrames = (packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11];
+                int groupStart = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
+                int groupCount = packet[16];
+                int payloadLength = (packet[17] << 8) | packet[18];
                 if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
                 {
                     return;
+                }
+                if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0)
+                {
+                    return;
+                }
+
+                if (totalDataFrames < 0)
+                {
+                    totalDataFrames = declaredTotalFrames;
                 }
 
                 int availablePayload = Math.Max(0, packet.Length - HeaderBytes);
@@ -133,14 +152,23 @@ namespace YTAHD.Cli.Core
                 }
 
                 // FEAT-015: validate per-frame SHA-256 before accepting payload.
-                var expectedHash = new ReadOnlySpan<byte>(packet, 9, 32);
+                var expectedHash = new ReadOnlySpan<byte>(packet, 19, 32);
                 var actualHash = SHA256.HashData(payload);
                 if (!actualHash.AsSpan().SequenceEqual(expectedHash))
                 {
                     return;
                 }
 
-                orderedPayload[frameIndex] = payload;
+                if (frameType == FrameTypeData)
+                {
+                    orderedPayload[frameIndex] = payload;
+                    groupCountByGroup[groupStart] = groupCount;
+                }
+                else if (frameType == FrameTypeParity)
+                {
+                    parityPayloadByGroup[groupStart] = payload;
+                    groupCountByGroup[groupStart] = groupCount;
+                }
             }
 
             void FlushRun()
@@ -204,30 +232,101 @@ namespace YTAHD.Cli.Core
 
             FlushRun();
 
+            if (totalDataFrames < 0)
+            {
+                throw new InvalidDataException("No valid frames were decoded.");
+            }
+
+            // FEAT-016: single-erasure recovery using XOR parity per frame group.
+            foreach (var kv in parityPayloadByGroup)
+            {
+                int groupStart = kv.Key;
+                int groupCount = groupCountByGroup.TryGetValue(groupStart, out var c) ? c : 0;
+                if (groupCount <= 0)
+                {
+                    continue;
+                }
+
+                int missingIndex = -1;
+                int missingCount = 0;
+                for (int i = 0; i < groupCount; i++)
+                {
+                    int idx = groupStart + i;
+                    if (idx >= totalDataFrames)
+                    {
+                        break;
+                    }
+
+                    if (!orderedPayload.ContainsKey(idx))
+                    {
+                        missingIndex = idx;
+                        missingCount++;
+                    }
+                }
+
+                if (missingCount > 1)
+                {
+                    throw new InvalidDataException($"Parity group starting at frame {groupStart} has {missingCount} missing data frames; cannot recover more than one loss per group.");
+                }
+
+                if (missingCount != 1)
+                {
+                    continue;
+                }
+
+                var recovered = new byte[payloadBytesPerFrame];
+                var parity = kv.Value;
+                Buffer.BlockCopy(parity, 0, recovered, 0, Math.Min(parity.Length, recovered.Length));
+
+                for (int i = 0; i < groupCount; i++)
+                {
+                    int idx = groupStart + i;
+                    if (idx == missingIndex) continue;
+                    if (!orderedPayload.TryGetValue(idx, out var existingPayload)) continue;
+
+                    for (int b = 0; b < recovered.Length; b++)
+                    {
+                        byte v = b < existingPayload.Length ? existingPayload[b] : (byte)0;
+                        recovered[b] ^= v;
+                    }
+                }
+
+                int recoveredLen = payloadBytesPerFrame;
+                if (missingIndex == totalDataFrames - 1)
+                {
+                    int remainder = expectedOutputBytes - (payloadBytesPerFrame * (totalDataFrames - 1));
+                    recoveredLen = Math.Max(0, Math.Min(payloadBytesPerFrame, remainder));
+                }
+
+                var recoveredPayload = new byte[recoveredLen];
+                if (recoveredLen > 0)
+                {
+                    Buffer.BlockCopy(recovered, 0, recoveredPayload, 0, recoveredLen);
+                }
+                orderedPayload[missingIndex] = recoveredPayload;
+            }
+
             var outBuf = new byte[expectedOutputBytes];
             int written = 0;
             int expectedFrameIndex = 0;
-            foreach (var kv in orderedPayload)
+            for (; expectedFrameIndex < totalDataFrames; expectedFrameIndex++)
             {
                 if (written >= expectedOutputBytes)
                 {
                     break;
                 }
 
-                if (kv.Key != expectedFrameIndex)
+                if (!orderedPayload.TryGetValue(expectedFrameIndex, out var payload))
                 {
                     throw new InvalidDataException($"Missing frame index {expectedFrameIndex}. Frame may be lost or failed hash verification.");
                 }
 
-                var payload = kv.Value;
                 int toCopy = Math.Min(payload.Length, expectedOutputBytes - written);
                 if (toCopy > 0)
                 {
                     Buffer.BlockCopy(payload, 0, outBuf, written, toCopy);
                     written += toCopy;
                 }
-
-                expectedFrameIndex++;
             }
 
             if (written < expectedOutputBytes)
