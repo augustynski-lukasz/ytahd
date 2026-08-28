@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using SkiaSharp;
 using YTAHD.Cli.Modulation;
@@ -10,6 +11,10 @@ namespace YTAHD.Cli.Core
 {
     public class EncoderEngine
     {
+        private const int FrameMagic = 0x5954; // 'YT'
+        private const byte FrameVersion = 1;
+        private const int HeaderBytes = 2 + 1 + 4 + 2 + 32; // magic + version + frameIndex + payloadLen + sha256
+
         private readonly IModulator _modulator;
         private readonly YTAHD.Cli.Infrastructure.IFFmpegWrapper _ffmpeg;
         private readonly int _macroblockSize;
@@ -44,8 +49,13 @@ namespace YTAHD.Cli.Core
             int blocksY = _height / _macroblockSize;
             int bitsPerFrame = blocksX * blocksY; // Phase 1: 1 bit per macroblock
 
-            int totalBits = data.Length * 8;
-            int framesNeeded = (totalBits + bitsPerFrame - 1) / bitsPerFrame;
+            int headerBits = HeaderBytes * 8;
+            int payloadBitsPerFrame = bitsPerFrame - headerBits;
+            if (payloadBitsPerFrame < 8)
+                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
+
+            int payloadBytesPerFrame = payloadBitsPerFrame / 8;
+            int framesNeeded = (data.Length + payloadBytesPerFrame - 1) / payloadBytesPerFrame;
 
             using var ff = await _ffmpeg.StartAsync(outputVideo);
             var stdin = ff.StandardInput;
@@ -54,10 +64,35 @@ namespace YTAHD.Cli.Core
             using var paintWhite = new SKPaint { Color = SKColors.White, IsAntialias = false };
             using var paintBlack = new SKPaint { Color = SKColors.Black, IsAntialias = false };
 
-            int bitIndex = 0;
+            int dataOffset = 0;
 
             for (int frameIdx = 0; frameIdx < framesNeeded; frameIdx++)
             {
+                int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
+                var payload = new ReadOnlySpan<byte>(data, dataOffset, payloadLen);
+
+                var framePacket = new byte[HeaderBytes + payloadBytesPerFrame];
+                framePacket[0] = (byte)((FrameMagic >> 8) & 0xFF);
+                framePacket[1] = (byte)(FrameMagic & 0xFF);
+                framePacket[2] = FrameVersion;
+
+                framePacket[3] = (byte)((frameIdx >> 24) & 0xFF);
+                framePacket[4] = (byte)((frameIdx >> 16) & 0xFF);
+                framePacket[5] = (byte)((frameIdx >> 8) & 0xFF);
+                framePacket[6] = (byte)(frameIdx & 0xFF);
+
+                framePacket[7] = (byte)((payloadLen >> 8) & 0xFF);
+                framePacket[8] = (byte)(payloadLen & 0xFF);
+
+                var hash = SHA256.HashData(payload);
+                Buffer.BlockCopy(hash, 0, framePacket, 9, hash.Length);
+                if (payloadLen > 0)
+                {
+                    Buffer.BlockCopy(data, dataOffset, framePacket, HeaderBytes, payloadLen);
+                }
+
+                dataOffset += payloadLen;
+
                 // create surface
                 var info = new SKImageInfo(_width, _height, SKColorType.Rgba8888, SKAlphaType.Opaque);
                 using var surface = SKSurface.Create(info);
@@ -70,19 +105,19 @@ namespace YTAHD.Cli.Core
                 {
                     for (int bx = 0; bx < blocksX; bx++)
                     {
+                        int frameBitIndex = by * blocksX + bx;
                         bool bit = false;
-                        if (bitIndex < totalBits)
+                        if (frameBitIndex < framePacket.Length * 8)
                         {
-                            int byteIdx = bitIndex / 8;
-                            int bitInByte = 7 - (bitIndex % 8); // MSB first
-                            bit = ((data[byteIdx] >> bitInByte) & 1) != 0;
+                            int byteIdx = frameBitIndex / 8;
+                            int bitInByte = 7 - (frameBitIndex % 8); // MSB first
+                            bit = ((framePacket[byteIdx] >> bitInByte) & 1) != 0;
                         }
 
                         int x = bx * _macroblockSize;
                         int y = by * _macroblockSize;
                         var rect = new SKRectI(x, y, x + _macroblockSize, y + _macroblockSize);
                         canvas.DrawRect(rect, bit ? paintWhite : paintBlack);
-                        bitIndex++;
                     }
                 }
 

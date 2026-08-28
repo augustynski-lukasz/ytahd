@@ -39,7 +39,7 @@ namespace YTAHD.Tests
 
                 var mod = new BinaryGridModulator();
                 var fake = new FakeFFmpegWrapper(128, 64, 30);
-                var encoder = new EncoderEngine(mod, fake, 16, 128, 64, 30);
+                var encoder = new EncoderEngine(mod, fake, 1, 128, 64, 30);
 
                 await encoder.VerifyAsync();
                 await encoder.EncodeAsync(originalZipPath, Path.Combine(root, "out.mp4"));
@@ -50,7 +50,7 @@ namespace YTAHD.Tests
 
                 var expectedZipBytes = checked((int)new FileInfo(originalZipPath).Length);
                 var decoder = new DecoderEngine(mod, fake);
-                await decoder.DecodeFromRgbStreamAsync(rawFrames, 128, 64, 16, expectedZipBytes, decodedZipPath);
+                await decoder.DecodeFromRgbStreamAsync(rawFrames, 128, 64, 1, expectedZipBytes, decodedZipPath);
 
                 ZipFile.ExtractToDirectory(originalZipPath, extractOriginalDir);
                 ZipFile.ExtractToDirectory(decodedZipPath, extractDecodedDir);

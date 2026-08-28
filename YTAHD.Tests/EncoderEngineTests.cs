@@ -22,7 +22,7 @@ namespace YTAHD.Tests
 
                 var mod = new BinaryGridModulator();
                 var fake = new FakeFFmpegWrapper(128, 64, 30);
-                var engine = new EncoderEngine(mod, fake, 16, 128, 64, 30);
+                var engine = new EncoderEngine(mod, fake, 1, 128, 64, 30);
                 await engine.VerifyAsync();
                 await engine.EncodeAsync(tmp, "out.mp4");
 

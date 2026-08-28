@@ -22,7 +22,7 @@ namespace YTAHD.Tests
 
                 var mod = new BinaryGridModulator();
                 var fake = new FakeFFmpegWrapper(128, 64, 30);
-                var encoder = new EncoderEngine(mod, fake, 16, 128, 64, 30);
+                var encoder = new EncoderEngine(mod, fake, 1, 128, 64, 30);
                 await encoder.VerifyAsync();
                 await encoder.EncodeAsync(tmpIn, "out.mp4");
 
@@ -31,7 +31,7 @@ namespace YTAHD.Tests
                 buf.Position = 0;
 
                 var decoder = new DecoderEngine(mod, fake);
-                await decoder.DecodeFromRgbStreamAsync(buf, 128, 64, 16, data.Length, tmpOut);
+                await decoder.DecodeFromRgbStreamAsync(buf, 128, 64, 1, data.Length, tmpOut);
 
                 var outData = await File.ReadAllBytesAsync(tmpOut);
                 Assert.Equal(data, outData);
@@ -57,7 +57,7 @@ namespace YTAHD.Tests
 
                 var mod = new BinaryGridModulator();
                 var fake = new FakeFFmpegWrapper(128, 64, 30);
-                var encoder = new EncoderEngine(mod, fake, 16, 128, 64, 30);
+                var encoder = new EncoderEngine(mod, fake, 1, 128, 64, 30);
                 await encoder.EncodeAsync(tmpIn, "out.mp4");
 
                 var buf = fake.Process?.Buffer;
@@ -65,7 +65,7 @@ namespace YTAHD.Tests
                 buf.Position = 0;
 
                 var decoder = new DecoderEngine(mod, fake);
-                await decoder.DecodeFromRgbStreamAsync(buf, 128, 64, 16, data.Length, tmpOut);
+                await decoder.DecodeFromRgbStreamAsync(buf, 128, 64, 1, data.Length, tmpOut);
 
                 var outData = await File.ReadAllBytesAsync(tmpOut);
                 Assert.Equal(data, outData);
