@@ -1,0 +1,43 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# JetBrains
+.idea/
+
+# Rider
+*.sln.iml
+
+# OS files
+Thumbs.db
+ehthumbs.db
+.DS_Store
+desktop.ini
+
+# NuGet
+*.nupkg
+packages/
+
+# Logs
+*.log
+
+# Test results
+TestResults/
+
+# Temporary
+*.tmp
+
+# Coverage
+coverage.*
+.coverage
+.coveragexml
+
+# Secrets
+secrets.json
