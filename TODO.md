@@ -54,7 +54,8 @@ CHORE-003 — Commit initial changes to git
 
 FEAT-008 — Implement `DecoderEngine` full decode path
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-28 (commit 4cea3050da7051cb973d0b3d22fd961b24ba6935)
 
 FEAT-009 — Design and add ECC / synchronization frames (Reed–Solomon / fountain)
 
