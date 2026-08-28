@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace YTAHD.Cli.Infrastructure
+namespace YTAHD.Core.Infrastructure
 {
     /// <summary>
     /// Minimal wrapper around an ffmpeg process that accepts raw frames over stdin.

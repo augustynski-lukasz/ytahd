@@ -1,6 +1,6 @@
 using System;
 
-namespace YTAHD.Cli.Modulation
+namespace YTAHD.Core.Modulation
 {
     /// <summary>
     /// Phase 1: Monochrome 16x16 macroblock modulator placeholder.

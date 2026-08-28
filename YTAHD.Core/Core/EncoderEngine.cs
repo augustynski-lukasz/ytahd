@@ -4,10 +4,10 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using SkiaSharp;
-using YTAHD.Cli.Modulation;
-using YTAHD.Cli.Infrastructure;
+using YTAHD.Core.Modulation;
+using YTAHD.Core.Infrastructure;
 
-namespace YTAHD.Cli.Core
+namespace YTAHD.Core.Core
 {
     public class EncoderEngine
     {
@@ -20,13 +20,13 @@ namespace YTAHD.Cli.Core
         private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
 
         private readonly IModulator _modulator;
-        private readonly YTAHD.Cli.Infrastructure.IFFmpegWrapper _ffmpeg;
+        private readonly YTAHD.Core.Infrastructure.IFFmpegWrapper _ffmpeg;
         private readonly int _macroblockSize;
         private readonly int _width;
         private readonly int _height;
         private readonly int _fps;
 
-        public EncoderEngine(IModulator modulator, YTAHD.Cli.Infrastructure.IFFmpegWrapper ffmpeg, int macroblockSize = 16, int width = 3840, int height = 2160, int fps = 60)
+        public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, int macroblockSize = 16, int width = 3840, int height = 2160, int fps = 60)
         {
             _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
             _ffmpeg = ffmpeg ?? throw new ArgumentNullException(nameof(ffmpeg));

@@ -1,6 +1,6 @@
 using System.IO;
 using System.Threading.Tasks;
-using YTAHD.Cli.Infrastructure;
+using YTAHD.Core.Infrastructure;
 
 namespace YTAHD.Tests
 {

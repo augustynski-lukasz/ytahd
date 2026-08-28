@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
-using YTAHD.Cli.Audio;
+using YTAHD.Core.Audio;
 
 namespace YTAHD.Tests
 {

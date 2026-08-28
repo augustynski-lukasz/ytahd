@@ -2,8 +2,8 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
-using YTAHD.Cli.Modulation;
-using YTAHD.Cli.Core;
+using YTAHD.Core.Modulation;
+using YTAHD.Core.Core;
 
 namespace YTAHD.Tests
 {

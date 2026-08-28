@@ -1,5 +1,12 @@
 # YouTube as a Hard Drive (YTAHD) - Binary to Video Pipeline
 
+## Project Layout
+
+* `YTAHD.Core` - reusable encoding/decoding library (engines, modulation, ffmpeg abstractions, audio helpers)
+* `YTAHD.Cli` - command-line host application built on top of `YTAHD.Core`
+* `YTAHD.Tests` - unit/integration tests for core functionality
+* `YTAHD.Perf` - performance and overhead analysis tool for comparing algorithms
+
 A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
 
 ---

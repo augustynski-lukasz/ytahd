@@ -1,7 +1,7 @@
 using System.IO;
 using System.Threading.Tasks;
 
-namespace YTAHD.Cli.Infrastructure
+namespace YTAHD.Core.Infrastructure
 {
     public interface IFFmpegProcess : System.IDisposable
     {

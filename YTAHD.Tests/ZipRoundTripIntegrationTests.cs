@@ -4,8 +4,8 @@ using System.IO.Compression;
 using System.Text;
 using System.Threading.Tasks;
 using Xunit;
-using YTAHD.Cli.Core;
-using YTAHD.Cli.Modulation;
+using YTAHD.Core.Core;
+using YTAHD.Core.Modulation;
 
 namespace YTAHD.Tests
 {

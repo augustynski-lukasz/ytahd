@@ -1,6 +1,6 @@
 using System;
 
-namespace YTAHD.Cli.Modulation
+namespace YTAHD.Core.Modulation
 {
     /// <summary>
     /// Phase 2: 12-bit RGB PAM modulation placeholder.

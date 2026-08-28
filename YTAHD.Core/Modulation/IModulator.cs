@@ -1,6 +1,6 @@
 using System;
 
-namespace YTAHD.Cli.Modulation
+namespace YTAHD.Core.Modulation
 {
     /// <summary>
     /// Abstract modulator contract. Implementations operate on spans for high-performance in-memory work.

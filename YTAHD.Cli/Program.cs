@@ -3,9 +3,9 @@ using System.CommandLine;
 using System.CommandLine.Invocation;
 using System.IO;
 using System.Threading.Tasks;
-using YTAHD.Cli.Core;
-using YTAHD.Cli.Infrastructure;
-using YTAHD.Cli.Modulation;
+using YTAHD.Core.Core;
+using YTAHD.Core.Infrastructure;
+using YTAHD.Core.Modulation;
 
 // Build a simple command line with extensible options (future-friendly)
 var root = new RootCommand("YTAHD - encode/decode binary data into resilient video frames");

@@ -1,5 +1,5 @@
 using Xunit;
-using YTAHD.Cli.Modulation;
+using YTAHD.Core.Modulation;
 
 namespace YTAHD.Tests
 {

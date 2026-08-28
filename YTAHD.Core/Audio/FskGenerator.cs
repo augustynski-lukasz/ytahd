@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace YTAHD.Cli.Audio
+namespace YTAHD.Core.Audio
 {
     /// <summary>
     /// Generates a simple PCM 16-bit 44.1kHz FSK-like stream to use as clock/sync.

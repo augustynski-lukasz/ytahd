@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using YTAHD.Cli.Modulation;
-using YTAHD.Cli.Infrastructure;
+using YTAHD.Core.Modulation;
+using YTAHD.Core.Infrastructure;
 
-namespace YTAHD.Cli.Core
+namespace YTAHD.Core.Core
 {
     public class DecoderEngine
     {
@@ -18,9 +18,9 @@ namespace YTAHD.Cli.Core
         private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
 
         private readonly IModulator _modulator;
-        private readonly YTAHD.Cli.Infrastructure.IFFmpegWrapper _ffmpeg;
+        private readonly YTAHD.Core.Infrastructure.IFFmpegWrapper _ffmpeg;
 
-        public DecoderEngine(IModulator modulator, YTAHD.Cli.Infrastructure.IFFmpegWrapper ffmpeg)
+        public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg)
         {
             _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
             _ffmpeg = ffmpeg ?? throw new ArgumentNullException(nameof(ffmpeg));
