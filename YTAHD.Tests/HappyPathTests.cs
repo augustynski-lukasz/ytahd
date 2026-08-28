@@ -68,6 +68,7 @@ namespace YTAHD.Tests
         private readonly int _height;
         private readonly int _fps;
         public long WrittenBytes => _process?.WrittenBytes ?? 0;
+        public FakeFFmpegProcess? Process => _process;
         private FakeFFmpegProcess? _process;
 
         public FakeFFmpegWrapper(int width, int height, int fps)
@@ -88,11 +89,47 @@ namespace YTAHD.Tests
     {
         private readonly MemoryStream _ms = new MemoryStream();
         public Stream StandardInput => _ms;
+        public MemoryStream Buffer => _ms;
         public long WrittenBytes => _ms.Length;
         public Task WaitForExitAsync() => Task.CompletedTask;
         public void Dispose()
         {
             // Intentionally do not dispose the memory stream so tests can inspect it after encoding completes.
+        }
+    }
+
+    [Fact]
+    public async Task EncoderDecoder_RoundTrip_FakeFFmpeg()
+    {
+        var tmpIn = Path.GetTempFileName();
+        var tmpOut = Path.GetTempFileName();
+        try
+        {
+            byte[] data = new byte[16];
+            new Random(2).NextBytes(data);
+            await File.WriteAllBytesAsync(tmpIn, data);
+
+            var mod = new BinaryGridModulator();
+            var fake = new FakeFFmpegWrapper(128, 64, 30);
+            var encoder = new EncoderEngine(mod, fake, 16, 128, 64, 30);
+            await encoder.VerifyAsync();
+            await encoder.EncodeAsync(tmpIn, "out.mp4");
+
+            // get the raw RGB bytes from fake process
+            var buf = fake.Process?.Buffer;
+            Assert.NotNull(buf);
+            buf.Position = 0;
+
+            var decoder = new DecoderEngine(mod, fake);
+            await decoder.DecodeFromRgbStreamAsync(buf, 128, 64, 16, data.Length, tmpOut);
+
+            var outData = await File.ReadAllBytesAsync(tmpOut);
+            Assert.Equal(data, outData);
+        }
+        finally
+        {
+            File.Delete(tmpIn);
+            File.Delete(tmpOut);
         }
     }
 }
