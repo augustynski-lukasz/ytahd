@@ -105,7 +105,8 @@ FEAT-015 — Validate decoded frame hashes before accepting payload bits
 
 FEAT-016 — Add erasure coding for lost-frame recovery (Reed-Solomon / fountain)
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-28 (commit 40dacb2)
 
 Notes:
 
