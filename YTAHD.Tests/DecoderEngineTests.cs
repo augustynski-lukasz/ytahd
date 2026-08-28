@@ -221,6 +221,45 @@ namespace YTAHD.Tests
             }
         }
 
+        [Fact]
+        public async Task DecodeFromRgbStream_Recovers_When_TwoPhysicalCopiesLostOfSameLogicalFrame()
+        {
+            var tmpIn = Path.GetTempFileName();
+            var tmpOut = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[3000];
+                new Random(23).NextBytes(data);
+                await File.WriteAllBytesAsync(tmpIn, data);
+
+                var mod = new BinaryGridModulator();
+                var fake = new FakeFFmpegWrapper(Width, Height, 30);
+                var encoder = new EncoderEngine(mod, fake, Macroblock, Width, Height, 30);
+                await encoder.EncodeAsync(tmpIn, "out.mp4");
+
+                var raw = fake.Process?.Buffer?.ToArray();
+                Assert.NotNull(raw);
+
+                int frameBytes = Width * Height * 3;
+
+                // Drop 2 of the 3 repeated physical frames for logical data frame #0.
+                // Remaining single copy should still decode correctly.
+                byte[] dropped = RemovePhysicalFrames(raw, frameBytes, 1, 2);
+
+                using var droppedStream = new MemoryStream(dropped, writable: false);
+                var decoder = new DecoderEngine(mod, fake);
+                await decoder.DecodeFromRgbStreamAsync(droppedStream, Width, Height, Macroblock, data.Length, tmpOut);
+
+                var outData = await File.ReadAllBytesAsync(tmpOut);
+                Assert.Equal(data, outData);
+            }
+            finally
+            {
+                File.Delete(tmpIn);
+                File.Delete(tmpOut);
+            }
+        }
+
         private static byte[] RemoveLogicalFrameCopies(byte[] raw, int frameBytes, int repeatsPerLogicalFrame, params int[] logicalFrameIndexes)
         {
             if (logicalFrameIndexes == null || logicalFrameIndexes.Length == 0)
@@ -251,6 +290,44 @@ namespace YTAHD.Tests
                 }
 
                 srcPos = start + logicalSize;
+            }
+
+            if (srcPos < raw.Length)
+            {
+                Buffer.BlockCopy(raw, srcPos, output, dstPos, raw.Length - srcPos);
+            }
+
+            return output;
+        }
+
+        private static byte[] RemovePhysicalFrames(byte[] raw, int frameBytes, params int[] physicalFrameIndexes)
+        {
+            if (physicalFrameIndexes == null || physicalFrameIndexes.Length == 0)
+            {
+                return raw;
+            }
+
+            Array.Sort(physicalFrameIndexes);
+            var output = new byte[raw.Length - (frameBytes * physicalFrameIndexes.Length)];
+            int srcPos = 0;
+            int dstPos = 0;
+
+            foreach (int physicalFrameIndex in physicalFrameIndexes)
+            {
+                int start = physicalFrameIndex * frameBytes;
+                if (start < srcPos || start + frameBytes > raw.Length)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(physicalFrameIndexes));
+                }
+
+                int copyLen = start - srcPos;
+                if (copyLen > 0)
+                {
+                    Buffer.BlockCopy(raw, srcPos, output, dstPos, copyLen);
+                    dstPos += copyLen;
+                }
+
+                srcPos = start + frameBytes;
             }
 
             if (srcPos < raw.Length)
