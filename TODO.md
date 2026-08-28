@@ -113,6 +113,11 @@ FEAT-017 — Add standalone performance analysis project for algorithm overhead 
 - Status: completed
 - Done: 2026-08-28 (commit cfd1189)
 
+FEAT-018 — Move reusable core functionality into dedicated library project
+
+- Status: completed
+- Done: 2026-08-28 (commit eb642f5)
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.
