@@ -108,6 +108,10 @@ FEAT-016 — Add erasure coding for lost-frame recovery (Reed-Solomon / fountain
 - Status: completed
 - Done: 2026-08-28 (commit 40dacb2)
 
+FEAT-017 — Add standalone performance analysis project for algorithm overhead and bandwidth stats
+
+- Status: completed
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

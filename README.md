@@ -65,3 +65,47 @@ To prevent frame-dropping or frame-duplication errors from permanently desynchro
 To achieve total file recovery without a single bit failing, the pipeline wraps data payloads inside **Fountain Codes (RaptorQ / Luby Transform)** prior to visual rendering. 
 
 Instead of traditional linear block boundaries, the input file is transformed into an infinite mathematical stream of symbol packets. The receiver can completely rebuild 100% of the original `.zip` archive as soon as it intercepts any **arbitrary 85% of the video frames**, completely neutralizing random frame loss or local macroblock corruption introduced by YouTube's processing pipeline.
+
+---
+
+## 📈 Performance Analysis Project
+
+A dedicated project is available at `YTAHD.Perf` to compare encoding/redundancy algorithms and compute transmission statistics.
+
+### What it reports
+
+* Initial payload size
+* Video total size
+* Frame size
+* Payload with overhead per frame
+* Payload net data per frame
+* Frame header size
+* Total payload overhead
+* Overhead percentages (header/parity/total)
+* Averages per frame (logical and physical)
+* Totals for whole video
+* Video bandwidth
+* Data bandwidth
+
+### Run examples
+
+```powershell
+dotnet run --project YTAHD.Perf\YTAHD.Perf.csproj -- --payload-bytes 10485760 --algorithm xor-parity --repeat 3 --parity-group 4
+```
+
+```powershell
+dotnet run --project YTAHD.Perf\YTAHD.Perf.csproj -- --payload-bytes 52428800 --compare true
+```
+
+### Options
+
+* `--payload-bytes` input payload size (bytes)
+* `--width` frame width
+* `--height` frame height
+* `--macroblock` macroblock size in pixels
+* `--fps` frame rate
+* `--header-bytes` frame header size
+* `--repeat` physical repeats per logical frame
+* `--parity-group` data frames per parity frame for xor-parity
+* `--algorithm` `repeat` or `xor-parity`
+* `--compare` compare `repeat(x1)`, `repeat(xN)`, and `xor-parity`
