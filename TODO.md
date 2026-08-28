@@ -93,6 +93,19 @@ FEAT-013 — Tag v0.1.0 and push to remote (release prep)
 
 - Status: not-started
 
+FEAT-014 — Add per-frame metadata (frame index, payload length, SHA-256)
+
+- Status: completed
+- Done: 2026-08-28 (commit c139f5878af6afea3a007948b30e6c96b3897cd9)
+
+FEAT-015 — Validate decoded frame hashes before accepting payload bits
+
+- Status: not-started
+
+FEAT-016 — Add erasure coding for lost-frame recovery (Reed-Solomon / fountain)
+
+- Status: not-started
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.
