@@ -62,6 +62,16 @@ CHORE-004 — Split unit tests into per-class test files
 - Status: completed
 - Done: 2026-08-28 (commit 6a626bde038573e26d4013ac4d8376f5b0b73456)
 
+CHORE-005 — Add zip encode/decode/unzip integration test
+
+- Status: completed
+- Done: 2026-08-28 (commit 0148e89216db1021017d8535bb3695c8747c9398)
+
+BUG-001 — Fix decoder frame de-dup run handling
+
+- Status: completed
+- Done: 2026-08-28 (commit 7766cbef21df36a859427673562ad6ba6a9b232e)
+
 FEAT-009 — Design and add ECC / synchronization frames (Reed–Solomon / fountain)
 
 - Status: not-started
