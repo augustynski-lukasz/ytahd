@@ -7,6 +7,29 @@
 * `YTAHD.Tests` - unit/integration tests for core functionality
 * `YTAHD.Perf` - performance and overhead analysis tool for comparing algorithms
 
+### Reusable Service API
+
+Host apps (CLI, GUI, Web) can call a stable app-layer API from `YTAHD.Core.Application`:
+
+```csharp
+using YTAHD.Core.Application;
+using YTAHD.Core.Modulation;
+
+var service = new YtahdCodecService(
+	new BinaryGridModulator(),
+	new DefaultFFmpegWrapperFactory());
+
+await service.EncodeAsync(new EncodeOptions
+{
+	InputFile = "input.zip",
+	OutputVideo = "out.mp4",
+	Width = 3840,
+	Height = 2160,
+	MacroblockSize = 16,
+	Fps = 60
+});
+```
+
 A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
 
 ---

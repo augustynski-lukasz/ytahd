@@ -1,5 +1,6 @@
 using System.IO;
 using System.Threading.Tasks;
+using YTAHD.Core.Application;
 using YTAHD.Core.Infrastructure;
 
 namespace YTAHD.Tests
@@ -25,6 +26,37 @@ namespace YTAHD.Tests
         {
             _process = new FakeFFmpegProcess();
             return Task.FromResult<IFFmpegProcess>(_process);
+        }
+    }
+
+    internal sealed class FakeFFmpegWrapperFactory : IFFmpegWrapperFactory
+    {
+        private readonly IFFmpegWrapper _encodeWrapper;
+        private readonly IFFmpegWrapper _decodeWrapper;
+
+        public FakeFFmpegWrapperFactory(IFFmpegWrapper wrapper)
+        {
+            _encodeWrapper = wrapper;
+            _decodeWrapper = wrapper;
+        }
+
+        public FakeFFmpegWrapperFactory(IFFmpegWrapper encodeWrapper, IFFmpegWrapper decodeWrapper)
+        {
+            _encodeWrapper = encodeWrapper;
+            _decodeWrapper = decodeWrapper;
+        }
+
+        public IFFmpegWrapper CreateForEncode(int width, int height, int fps)
+        {
+            _ = width;
+            _ = height;
+            _ = fps;
+            return _encodeWrapper;
+        }
+
+        public IFFmpegWrapper CreateForDecode()
+        {
+            return _decodeWrapper;
         }
     }
 

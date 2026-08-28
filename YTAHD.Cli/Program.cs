@@ -3,8 +3,7 @@ using System.CommandLine;
 using System.CommandLine.Invocation;
 using System.IO;
 using System.Threading.Tasks;
-using YTAHD.Core.Core;
-using YTAHD.Core.Infrastructure;
+using YTAHD.Core.Application;
 using YTAHD.Core.Modulation;
 
 // Build a simple command line with extensible options (future-friendly)
@@ -29,10 +28,17 @@ encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockS
 {
     Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}]");
     IModulator modulator = new BinaryGridModulator();
-    var ffmpeg = new FFmpegWrapper(width, height, fps);
-    var engine = new EncoderEngine(modulator, ffmpeg, macroblockSize, width, height, fps);
-    await engine.VerifyAsync();
-    await engine.EncodeAsync(input.FullName, output.FullName);
+    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory());
+    await service.EncodeAsync(new EncodeOptions
+    {
+        InputFile = input.FullName,
+        OutputVideo = output.FullName,
+        MacroblockSize = macroblockSize,
+        Width = width,
+        Height = height,
+        Fps = fps,
+        VerifyFfmpeg = true
+    });
 }, argIn, argOut, optMacro, optWidth, optHeight, optFps);
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -44,10 +50,13 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output) =>
 {
     Console.WriteLine($"Decode: {input} -> {output}");
     IModulator modulator = new BinaryGridModulator();
-    var ffmpeg = new FFmpegWrapper();
-    var engine = new DecoderEngine(modulator, ffmpeg);
-    await engine.VerifyAsync();
-    await engine.DecodeAsync(input.FullName, output.FullName);
+    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory());
+    await service.DecodeAsync(new DecodeOptions
+    {
+        InputVideo = input.FullName,
+        OutputFile = output.FullName,
+        VerifyFfmpeg = true
+    });
 }, decodeIn, decodeOut);
 
 root.AddCommand(encodeCommand);
