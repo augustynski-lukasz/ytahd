@@ -42,5 +42,39 @@ namespace YTAHD.Tests
                 File.Delete(tmpOut);
             }
         }
+
+        [Fact]
+        public async Task DecodeFromRgbStream_Dedup_PreservesIdenticalAdjacentPayloadFrames()
+        {
+            var tmpIn = Path.GetTempFileName();
+            var tmpOut = Path.GetTempFileName();
+            try
+            {
+                // 16 bytes with the current 128x64/16 geometry => 4 payload frames.
+                // All-zero bytes produce identical payload frames, which de-dup must still expand correctly.
+                byte[] data = new byte[16];
+                await File.WriteAllBytesAsync(tmpIn, data);
+
+                var mod = new BinaryGridModulator();
+                var fake = new FakeFFmpegWrapper(128, 64, 30);
+                var encoder = new EncoderEngine(mod, fake, 16, 128, 64, 30);
+                await encoder.EncodeAsync(tmpIn, "out.mp4");
+
+                var buf = fake.Process?.Buffer;
+                Assert.NotNull(buf);
+                buf.Position = 0;
+
+                var decoder = new DecoderEngine(mod, fake);
+                await decoder.DecodeFromRgbStreamAsync(buf, 128, 64, 16, data.Length, tmpOut);
+
+                var outData = await File.ReadAllBytesAsync(tmpOut);
+                Assert.Equal(data, outData);
+            }
+            finally
+            {
+                File.Delete(tmpIn);
+                File.Delete(tmpOut);
+            }
+        }
     }
 }

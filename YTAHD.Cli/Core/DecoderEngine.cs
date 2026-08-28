@@ -50,8 +50,48 @@ namespace YTAHD.Cli.Core
 
             var bits = new System.Collections.Generic.List<int>(expectedOutputBytes * 8);
 
+            const int repeatedFrameCount = 3;
             byte[] frameBuf = new byte[frameBytes];
-            int frameOrdinal = 0;
+            byte[] lastFrame = Array.Empty<byte>();
+            bool hasLastFrame = false;
+            int lastRunLength = 0;
+
+            void DecodePayloadFrame(ReadOnlySpan<byte> frame)
+            {
+                for (int by = 0; by < blocksY && bits.Count < expectedOutputBytes * 8; by++)
+                {
+                    for (int bx = 0; bx < blocksX && bits.Count < expectedOutputBytes * 8; bx++)
+                    {
+                        int sampleX = bx * macroblockSize + macroblockSize / 2;
+                        int sampleY = by * macroblockSize + macroblockSize / 2;
+                        int idx = sampleY * rowBytes + sampleX * 3; // R channel
+                        if (idx < 0 || idx + 2 >= frameBytes)
+                        {
+                            bits.Add(0);
+                            continue;
+                        }
+
+                        byte r = frame[idx];
+                        bits.Add(r > 128 ? 1 : 0);
+                    }
+                }
+            }
+
+            void FlushRun()
+            {
+                if (!hasLastFrame || lastRunLength <= 0)
+                {
+                    return;
+                }
+
+                // Expand a run of duplicated frames back into payload-frame count.
+                // This preserves legitimate adjacent identical payload frames (e.g. 6 repeated frames => 2 payload frames).
+                int payloadCopies = Math.Max(1, (lastRunLength + (repeatedFrameCount / 2)) / repeatedFrameCount);
+                for (int i = 0; i < payloadCopies && bits.Count < expectedOutputBytes * 8; i++)
+                {
+                    DecodePayloadFrame(lastFrame);
+                }
+            }
 
             while (true)
             {
@@ -65,31 +105,29 @@ namespace YTAHD.Cli.Core
 
                 if (read < frameBytes) break; // end
 
-                // Encoder repeats each payload frame exactly 3 times. Keep the first and skip the next two.
-                if ((frameOrdinal % 3) != 0)
+                if (!hasLastFrame)
                 {
-                    frameOrdinal++;
+                    lastFrame = new byte[frameBytes];
+                    Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
+                    hasLastFrame = true;
+                    lastRunLength = 1;
                     continue;
                 }
 
-                // sample macroblocks
-                for (int by = 0; by < blocksY; by++)
+                if (frameBuf.AsSpan(0, frameBytes).SequenceEqual(lastFrame.AsSpan(0, frameBytes)))
                 {
-                    for (int bx = 0; bx < blocksX; bx++)
-                    {
-                        int sampleX = bx * macroblockSize + macroblockSize / 2;
-                        int sampleY = by * macroblockSize + macroblockSize / 2;
-                        int idx = sampleY * rowBytes + sampleX * 3; // R channel
-                        if (idx < 0 || idx + 2 >= frameBytes) { bits.Add(0); continue; }
-                        byte r = frameBuf[idx];
-                        bits.Add(r > 128 ? 1 : 0);
-                    }
+                    lastRunLength++;
+                    continue;
                 }
 
-                frameOrdinal++;
+                FlushRun();
+                Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
+                lastRunLength = 1;
 
                 if (bits.Count >= expectedOutputBytes * 8) break;
             }
+
+            FlushRun();
 
             // assemble bytes MSB-first
             var outBuf = new byte[expectedOutputBytes];
