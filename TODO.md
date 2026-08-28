@@ -100,7 +100,8 @@ FEAT-014 — Add per-frame metadata (frame index, payload length, SHA-256)
 
 FEAT-015 — Validate decoded frame hashes before accepting payload bits
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-28 (commit 5d941ad91f86df9e2cc967e16c7a9d2be7360fee)
 
 FEAT-016 — Add erasure coding for lost-frame recovery (Reed-Solomon / fountain)
 
