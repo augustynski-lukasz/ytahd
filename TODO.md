@@ -57,6 +57,11 @@ FEAT-008 — Implement `DecoderEngine` full decode path
 - Status: completed
 - Done: 2026-08-28 (commit 4cea3050da7051cb973d0b3d22fd961b24ba6935)
 
+CHORE-004 — Split unit tests into per-class test files
+
+- Status: completed
+- Done: 2026-08-28 (commit 6a626bde038573e26d4013ac4d8376f5b0b73456)
+
 FEAT-009 — Design and add ECC / synchronization frames (Reed–Solomon / fountain)
 
 - Status: not-started
