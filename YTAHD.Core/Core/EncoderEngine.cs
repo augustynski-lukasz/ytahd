@@ -74,9 +74,25 @@ namespace YTAHD.Core.Core
             {
                 byte[] rgbFrame = null;
 
-                if (_modulator is PseudoQamModulator qamModulator)
+                if (_modulator is PseudoQamModulator)
                 {
                     var rgbaFrame = PseudoQamModulator.CreatePhase2Frame(_width, _height, borderWidth: 32, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
+                    rgbFrame = new byte[_width * _height * 3];
+                    for (int y = 0; y < _height; y++)
+                    {
+                        for (int x = 0; x < _width; x++)
+                        {
+                            int srcIndex = (y * _width + x) * 4;
+                            int dstIndex = (y * _width + x) * 3;
+                            rgbFrame[dstIndex] = rgbaFrame[srcIndex];
+                            rgbFrame[dstIndex + 1] = rgbaFrame[srcIndex + 1];
+                            rgbFrame[dstIndex + 2] = rgbaFrame[srcIndex + 2];
+                        }
+                    }
+                }
+                else if (_modulator is DctModulator)
+                {
+                    var rgbaFrame = DctModulator.CreatePhase3Frame(_width, _height, borderWidth: 32, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
                     rgbFrame = new byte[_width * _height * 3];
                     for (int y = 0; y < _height; y++)
                     {

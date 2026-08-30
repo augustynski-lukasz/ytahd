@@ -24,16 +24,21 @@ namespace YTAHD.Core.Modulation
 
             pixelBuffer.Clear();
 
-            int position = 0;
-            for (int i = 0; i < input.Length && position < Cutoff * Cutoff; i++, position++)
+            var basis = DctCarrierBasis.GenerateBasis(BasisSize, Cutoff);
+            int payloadCount = Math.Min(input.Length, Cutoff * Cutoff);
+
+            for (int i = 0; i < payloadCount; i++)
             {
-                int y = position / Cutoff;
-                int x = position % Cutoff;
+                int y = i / Cutoff;
+                int x = i % Cutoff;
+                if (Math.Abs(basis[y, x]) < 0.0001d)
+                {
+                    continue;
+                }
+
                 pixelBuffer[y * BasisSize + x] = input[i];
             }
 
-            // Preserve a neutral zero-energy baseline elsewhere in the low-frequency block while keeping
-            // the payload concentrated in the top-left coefficients that are most codec-friendly.
             for (int y = 0; y < BasisSize; y++)
             {
                 for (int x = 0; x < BasisSize; x++)
@@ -48,6 +53,62 @@ namespace YTAHD.Core.Modulation
             }
         }
 
+        public static byte[] CreatePhase3Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+        {
+            if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
+            if (borderWidth < 0 || borderWidth > Math.Min(width, height) / 2) throw new ArgumentOutOfRangeException(nameof(borderWidth));
+
+            var frame = new byte[width * height * 4];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int idx = (y * width + x) * 4;
+                    bool onBorder = x < borderWidth || x >= width - borderWidth || y < borderWidth || y >= height - borderWidth;
+                    byte neutral = onBorder ? (byte)128 : (byte)0;
+                    frame[idx + 0] = neutral;
+                    frame[idx + 1] = neutral;
+                    frame[idx + 2] = neutral;
+                    frame[idx + 3] = 255;
+                }
+            }
+
+            int payloadIndex = 0;
+            int blockSize = 8;
+            int carrierX = borderWidth + 8;
+            int carrierY = borderWidth + 8;
+
+            for (int blockY = 0; blockY < height - borderWidth * 2 && payloadIndex < payload.Length; blockY += blockSize)
+            {
+                for (int blockX = 0; blockX < width - borderWidth * 2 && payloadIndex < payload.Length; blockX += blockSize)
+                {
+                    int x = borderWidth + blockX;
+                    int y = borderWidth + blockY;
+                    if (x + blockSize > width || y + blockSize > height)
+                    {
+                        continue;
+                    }
+
+                    var payloadSlice = payload.Slice(payloadIndex, Math.Min(payload.Length - payloadIndex, Cutoff * Cutoff));
+                    for (int i = 0; i < payloadSlice.Length; i++)
+                    {
+                        int py = i / Cutoff;
+                        int px = i % Cutoff;
+                        int idx = ((y + py) * width + (x + px)) * 4;
+                        byte value = payloadSlice[i];
+                        frame[idx + 0] = value;
+                        frame[idx + 1] = value;
+                        frame[idx + 2] = value;
+                        frame[idx + 3] = 255;
+                    }
+
+                    payloadIndex += payloadSlice.Length;
+                }
+            }
+
+            return frame;
+        }
+
         public void Decode(ReadOnlySpan<byte> pixelBuffer, Span<byte> output)
         {
             if (output.IsEmpty)
@@ -57,11 +118,64 @@ namespace YTAHD.Core.Modulation
 
             output.Clear();
 
-            for (int i = 0; i < output.Length && i < Cutoff * Cutoff; i++)
+            var basis = DctCarrierBasis.GenerateBasis(BasisSize, Cutoff);
+            int payloadCount = Math.Min(output.Length, Cutoff * Cutoff);
+
+            int validCount = 0;
+            double minValue = double.MaxValue;
+            double maxValue = double.MinValue;
+
+            for (int i = 0; i < payloadCount; i++)
             {
                 int y = i / Cutoff;
                 int x = i % Cutoff;
-                output[i] = pixelBuffer[y * BasisSize + x];
+                if (Math.Abs(basis[y, x]) < 0.0001d)
+                {
+                    continue;
+                }
+
+                double sample = pixelBuffer[y * BasisSize + x];
+                if (sample < minValue) minValue = sample;
+                if (sample > maxValue) maxValue = sample;
+                validCount++;
+            }
+
+            if (validCount == 0)
+            {
+                return;
+            }
+
+            if (Math.Abs(maxValue - minValue) < 0.0001d)
+            {
+                for (int i = 0; i < payloadCount; i++)
+                {
+                    int y = i / Cutoff;
+                    int x = i % Cutoff;
+                    if (Math.Abs(basis[y, x]) < 0.0001d)
+                    {
+                        continue;
+                    }
+
+                    output[i] = pixelBuffer[y * BasisSize + x];
+                }
+                return;
+            }
+
+            double slope = 255d / (maxValue - minValue);
+            double intercept = -minValue * slope;
+
+            for (int i = 0; i < payloadCount; i++)
+            {
+                int y = i / Cutoff;
+                int x = i % Cutoff;
+                if (Math.Abs(basis[y, x]) < 0.0001d)
+                {
+                    continue;
+                }
+
+                double sample = pixelBuffer[y * BasisSize + x];
+                double normalized = sample * slope + intercept;
+                output[i] = (byte)Math.Clamp(Math.Round(normalized), 0, 255);
             }
         }
     }
