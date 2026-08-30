@@ -69,9 +69,10 @@ namespace YTAHD.Tests
         [Fact]
         public async Task FFmpegWrapper_UsesExplicitExecutablePath_WhenProvided()
         {
-            var ffmpegPath = "D:\\!Tools\\ffmpeg-20151019\\bin\\ffmpeg.exe";
-            var wrapper = new FFmpegWrapper(ffmpegExecutablePath: ffmpegPath);
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the explicit-path test.");
 
+            var wrapper = new FFmpegWrapper(ffmpegExecutablePath: ffmpegPath);
             var isAvailable = await wrapper.IsAvailableAsync();
 
             Assert.True(isAvailable);
