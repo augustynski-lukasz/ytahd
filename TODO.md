@@ -206,6 +206,11 @@ FEAT-033 — Add a protocol-level validation test matrix that checks encoder/dec
 - Status: completed
 - Done: 2026-08-30
 
+FEAT-034 — Extract `DecodedFrameAccumulator` from `DecoderEngine` and validate its recovery contract directly
+
+- Status: completed
+- Done: 2026-08-30
+
 CHORE-008 — Ignore generated temporary test files and artifacts
 
 - Status: completed
