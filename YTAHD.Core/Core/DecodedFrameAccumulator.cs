@@ -16,6 +16,7 @@ namespace YTAHD.Core.Core
         public Dictionary<int, int> GroupCountByGroup => _groupCountByGroup;
         public int TotalDataFrames { get; private set; } = -1;
         public bool SawInvalidPacket { get; private set; }
+        public int RecoveredGroupCount { get; private set; }
 
         public bool TryAddDecodedFrame(
             ReadOnlySpan<byte> frame,
@@ -143,6 +144,7 @@ namespace YTAHD.Core.Core
                     Buffer.BlockCopy(recovered, 0, recoveredPayload, 0, recoveredLen);
                 }
                 _orderedPayload[missingIndex] = recoveredPayload;
+                RecoveredGroupCount++;
             }
         }
 

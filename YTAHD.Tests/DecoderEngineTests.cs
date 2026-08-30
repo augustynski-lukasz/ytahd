@@ -163,6 +163,28 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public void PacketQualityScore_Prefers_Stronger_Valid_Frame_Within_Duplicate_Run()
+        {
+            var strongPayload = new byte[32];
+            var weakPayload = new byte[32];
+            for (int i = 0; i < strongPayload.Length; i++)
+            {
+                strongPayload[i] = (byte)((i * 17 + 3) % 251);
+                weakPayload[i] = (byte)(i % 3);
+            }
+
+            var strongPacket = EncoderEngine.CreateDataFramePacket(0, 2, 0, 2, strongPayload.Length, strongPayload, strongPayload.Length);
+            var weakPacket = EncoderEngine.CreateDataFramePacket(0, 2, 0, 2, weakPayload.Length, weakPayload, weakPayload.Length);
+
+            var strongScore = DecoderEngine.GetPacketQualityScore(strongPacket);
+            var weakScore = DecoderEngine.GetPacketQualityScore(weakPacket);
+
+            Assert.True(strongScore > weakScore);
+            Assert.True(strongScore > 0);
+            Assert.True(weakScore > 0);
+        }
+
+        [Fact]
         public async Task EncoderDecoder_RoundTrip_FakeFFmpeg()
         {
             var tmpIn = Path.GetTempFileName();

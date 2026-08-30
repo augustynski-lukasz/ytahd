@@ -22,6 +22,8 @@ namespace YTAHD.Core.Core
         private readonly int _height;
         private readonly int _fps;
 
+        public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
+
         public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, int macroblockSize = 16, int width = 3840, int height = 2160, int fps = 60)
         {
             _modulator = NormalizeModulator(modulator, macroblockSize);
@@ -63,6 +65,49 @@ namespace YTAHD.Core.Core
             return FramePacket.TryParse(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
         }
 
+        public static int GetPacketQualityScore(ReadOnlySpan<byte> packet)
+        {
+            if (packet.Length < HeaderBytes)
+            {
+                return 0;
+            }
+
+            if (!TryParseFramePacket(packet.ToArray(), out var frameType, out _, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
+            {
+                return 0;
+            }
+
+            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - HeaderBytes)
+            {
+                return 0;
+            }
+
+            int score = 1000;
+            score += payloadLength * 8;
+            score += frameType == FrameTypeParity ? 32 : 64;
+            score += Math.Max(0, declaredTotalFrames) * 2;
+
+            int nonZeroCount = 0;
+            int bitTransitionCount = 0;
+            for (int i = 0; i < payload.Length; i++)
+            {
+                byte value = payload[i];
+                if (value != 0)
+                {
+                    nonZeroCount++;
+                }
+
+                if (i > 0 && payload[i - 1] != value)
+                {
+                    bitTransitionCount += 1;
+                }
+            }
+
+            score += nonZeroCount * 6;
+            score += bitTransitionCount * 2;
+            return score;
+        }
+
         private static int GetDuplicateFrameCount(int lastRunLength, int repeatedFrameCount)
         {
             if (repeatedFrameCount <= 0)
@@ -88,6 +133,9 @@ namespace YTAHD.Core.Core
             {
                 decodePayloadFrame(lastFrame);
             }
+
+            hasLastFrame = false;
+            lastRunLength = 0;
         }
 
         private static bool TryReadDecodedPacket(
@@ -253,10 +301,8 @@ namespace YTAHD.Core.Core
             var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
             byte[] frameBuf = new byte[frameBytes];
-            byte[] lastFrame = Array.Empty<byte>();
-            byte[] lastLogicalSignature = Array.Empty<byte>();
-            bool hasLastFrame = false;
-            int lastRunLength = 0;
+            var duplicateTracker = new DuplicateFrameRunTracker();
+            var metrics = new DecodeMetrics();
 
             byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
             {
@@ -283,34 +329,24 @@ namespace YTAHD.Core.Core
 
                 if (read < frameBytes) break;
 
-                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out _))
+                metrics.TotalFramesSeen++;
+
+                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out var packet))
                 {
+                    metrics.InvalidPacketCount++;
                     continue;
                 }
 
                 var currentLogicalSignature = CreateLogicalSignature(frameBuf);
+                int currentQuality = GetPacketQualityScore(packet);
 
-                if (!hasLastFrame)
+                var completedFrame = duplicateTracker.Update(frameBuf, currentLogicalSignature, currentQuality);
+                if (completedFrame is not null)
                 {
-                    lastFrame = new byte[frameBytes];
-                    Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
-                    lastLogicalSignature = currentLogicalSignature;
-                    hasLastFrame = true;
-                    lastRunLength = 1;
-                    continue;
+                    metrics.DuplicateRunCount++;
+                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completedFrame.BestQuality);
+                    DecodePayloadFrame(completedFrame.BestFrame);
                 }
-
-                if (currentLogicalSignature.AsSpan().SequenceEqual(lastLogicalSignature.AsSpan()))
-                {
-                    lastRunLength++;
-                    continue;
-                }
-
-                FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
-
-                Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
-                lastLogicalSignature = currentLogicalSignature;
-                lastRunLength = 1;
 
                 if (expectedOutputBytes > 0)
                 {
@@ -331,7 +367,7 @@ namespace YTAHD.Core.Core
                 }
             }
 
-            FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
+            duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
             if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
             {
@@ -339,6 +375,10 @@ namespace YTAHD.Core.Core
             }
 
             accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, expectedOutputBytes);
+            metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
+            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
+            LastDecodeMetrics = metrics;
+
             var outBuf = accumulator.AssembleOutput(expectedOutputBytes);
             await File.WriteAllBytesAsync(outputFile, outBuf);
         }
@@ -361,10 +401,8 @@ namespace YTAHD.Core.Core
             var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
             byte[] frameBuf = new byte[frameBytes];
-            byte[] lastFrame = Array.Empty<byte>();
-            byte[] lastLogicalSignature = Array.Empty<byte>();
-            bool hasLastFrame = false;
-            int lastRunLength = 0;
+            var duplicateTracker = new DuplicateFrameRunTracker();
+            var metrics = new DecodeMetrics();
 
             byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
             {
@@ -391,37 +429,27 @@ namespace YTAHD.Core.Core
 
                 if (read < frameBytes) break;
 
-                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out _))
+                metrics.TotalFramesSeen++;
+
+                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out var packet))
                 {
+                    metrics.InvalidPacketCount++;
                     continue;
                 }
 
                 var currentLogicalSignature = CreateLogicalSignature(frameBuf);
+                int currentQuality = GetPacketQualityScore(packet);
 
-                if (!hasLastFrame)
+                var completedFrame = duplicateTracker.Update(frameBuf, currentLogicalSignature, currentQuality);
+                if (completedFrame is not null)
                 {
-                    lastFrame = new byte[frameBytes];
-                    Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
-                    lastLogicalSignature = currentLogicalSignature;
-                    hasLastFrame = true;
-                    lastRunLength = 1;
-                    continue;
+                    metrics.DuplicateRunCount++;
+                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completedFrame.BestQuality);
+                    duplicateTracker.Flush(completedFrame, repeatedFrameCount, frame => DecodePayloadFrame(frame));
                 }
-
-                if (currentLogicalSignature.AsSpan().SequenceEqual(lastLogicalSignature.AsSpan()))
-                {
-                    lastRunLength++;
-                    continue;
-                }
-
-                FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
-
-                Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
-                lastLogicalSignature = currentLogicalSignature;
-                lastRunLength = 1;
             }
 
-            FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
+            duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
             if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
             {
@@ -435,6 +463,10 @@ namespace YTAHD.Core.Core
             }
 
             accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, expectedLength);
+            metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
+            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
+            LastDecodeMetrics = metrics;
+
             var outBuf = accumulator.AssembleOutput(expectedLength);
             await File.WriteAllBytesAsync(outputFile, outBuf);
         }

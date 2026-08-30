@@ -224,33 +224,33 @@ BUG-002 — Make the Phase 1 decoder tolerant of lossy compressed video instead 
 
 BUG-003 — Normalize the Phase 1 binary modulator contract to a consistent 16×16 macroblock layout
 
-- Status: in-progress
-- Started: 2026-08-30
-- Notes: this is the current project guardrail; the encoder and decoder now share one macroblock-size contract to prevent real ffmpeg streams from decoding as all-zero or invalid packets
+- Status: completed
+- Done: 2026-08-30
+- Notes: encoder and decoder now share a consistent 16×16 payload contract, preventing real ffmpeg streams from being decoded as empty or invalid packets
+
+BUG-004 — Finalize the real FFmpeg-based Phase 1 pipeline for lossy encode/decode integration
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: updated the CLI/FFmpeg wiring, service options, and regression tests so the real encode/decode flow uses the correct ffmpeg path, timeout behavior, and lossy decoder semantics
 
 FEAT-035 — Add an explicit real-ffmpeg regression test suite for H.264 smoke validation
 
-- Status: not-started
-- Notes: keep the command-line encode/decode smoke path in a repeatable test harness so future regressions are caught immediately
+- Status: completed
+- Done: 2026-08-30
+- Notes: the real ffmpeg smoke test is now part of the suite and validates the actual libx264 encode/decode path end-to-end
 
 FEAT-036 — Harden the lossy decoder with quality-aware packet filtering and duplicate-run scoring
 
-- Status: not-started
-- Notes: continue to tolerate real video drift without silently accepting totally empty or corrupt payload streams
+- Status: completed
+- Done: 2026-08-30
+- Notes: the decoder now prefers the strongest valid member of a repeated run, which makes the Phase 1 path resilient to real lossy duplicate frames without silently accepting empty payloads
 
 FEAT-037 — Document the H.264 baseline and ffmpeg override behavior in the CLI and README
 
-- Status: not-started
-- Notes: make the Phase 1 defaults and supported ffmpeg-path options explicit for local and CI users
-
-
 - Status: completed
-- Done: 2026-08-30 (updated `DecoderEngine` to use threshold-based sampling, accept lossy bit drift, and validate logical payload signatures instead of exact raw pixel equality)
-
-BUG-003 — Finalize the real FFmpeg-based Phase 1 pipeline for lossy encode/decode integration
-
-- Status: completed
-- Done: 2026-08-30 (updated the CLI/FFmpeg wiring, service options, and regression tests so the real encode/decode flow uses the correct FFmpeg path, timeout behavior, and lossy decoder semantics)
+- Done: 2026-08-30
+- Notes: README and CLI examples now document the real H.264 path and the explicit ffmpeg override behavior for encode/decode
 
 REFACTOR-001 — Extract the frame-packet parser/validator into a dedicated helper and cover edge cases with tests
 
@@ -266,6 +266,29 @@ REFACTOR-003 — Extract a decode pipeline orchestrator for stream reading, fram
 
 - Status: completed
 - Done: 2026-08-30 (duplicate-run and payload handling are centralized so the stream loop remains a small coordinator with shared recovery logic)
+
+BUG-005 — Add a real-loss regression for Phase 1 H.264 decode under lossy duplicate-frame drift
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: the duplicate-frame quality regression is in place and verifies the decoder chooses the strongest valid member of a lossy run before reconstructing the payload, preventing silent corruption in real H.264 drift scenarios
+
+FEAT-038 — Split the decoder into quality scoring, duplicate-run selection, and recovery stages with dedicated unit coverage
+
+- Status: not-started
+- Notes: isolate packet validation, duplicate-run winner selection, and parity recovery into smaller testable units so the quality model can evolve without breaking the contract
+
+FEAT-039 — Add explicit decode metrics and thresholds for invalid packets, recovered groups, and duplicate-run quality
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: decode metrics are now tracked on the real pipeline and threshold checks are available for invalid-packet ratio, recovered groups, and duplicate-run quality decisions
+
+FEAT-040 — Freeze the Phase 1 H.264 baseline as the stable production contract before Phase 2+ work
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: the current real H.264 path is now the baseline spec for future modulation work and is documented as the stable contract that remains subject to smoke-validation before phase expansion
 
 Notes:
 
