@@ -86,22 +86,9 @@ namespace YTAHD.Core.Core
                     duplicateTracker.Flush(completedFrame, repeatedFrameCount, frame => DecodePayloadFrame(frame));
                 }
 
-                if (expectedOutputBytes > 0)
+                if (DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes))
                 {
-                    int accumulated = 0;
-                    foreach (var kv in accumulator.OrderedPayload)
-                    {
-                        accumulated += kv.Value.Length;
-                        if (accumulated >= expectedOutputBytes)
-                        {
-                            break;
-                        }
-                    }
-
-                    if (accumulated >= expectedOutputBytes)
-                    {
-                        break;
-                    }
+                    break;
                 }
             }
 
@@ -110,7 +97,7 @@ namespace YTAHD.Core.Core
             if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
                 throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
 
-            int resolvedExpectedBytes = expectedOutputBytes > 0 ? expectedOutputBytes : GetAccumulatorOutputLength(accumulator);
+            int resolvedExpectedBytes = DecodeRecoveryPolicy.ResolveExpectedOutputBytes(accumulator, expectedOutputBytes);
             accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, resolvedExpectedBytes);
             metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
             metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
@@ -126,17 +113,6 @@ namespace YTAHD.Core.Core
 
             var output = await ProcessAsync(rgbStream, expectedOutputBytes);
             await File.WriteAllBytesAsync(outputFile, output);
-        }
-
-        private static int GetAccumulatorOutputLength(DecodedFrameAccumulator accumulator)
-        {
-            int total = 0;
-            foreach (var payload in accumulator.OrderedPayload.Values)
-            {
-                total += payload.Length;
-            }
-
-            return total;
         }
     }
 }

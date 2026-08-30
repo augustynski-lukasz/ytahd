@@ -354,8 +354,9 @@ REFACTOR-008 — Extract the decode stream loop into a dedicated pipeline orches
 
 REFACTOR-009 — Separate recovery policy from payload assembly and duplicate selection
 
-- Status: not-started
-- Notes: Consolidate the decision rules for parity recovery, duplicate-run choice, and output assembly into a single recovery policy object so the packet codec and accumulator remain deterministic and testable.
+- Status: completed
+- Done: 2026-08-30
+- Notes: `DecodeRecoveryPolicy` now owns the stop condition and target-byte resolution, while the orchestrator coordinates stream processing, duplicate runs, and assembly decisions. The accumulator remains focused on storing and assembling valid payload data.
 - Acceptance criteria:
   - Recovery decisions are made by a dedicated policy or strategy abstraction.
   - The accumulator only stores/assembles valid frame data.
