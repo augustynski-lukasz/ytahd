@@ -74,15 +74,18 @@ BUG-001 — Fix decoder frame de-dup run handling
 
 FEAT-009 — Design and add ECC / synchronization frames (Reed–Solomon / fountain)
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-30 (implemented via existing frame metadata and integrity validation path in core)
 
 FEAT-010 — Add calibration border, pilot palette, and test patterns
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-30 (calibration border and pilot palette are implemented and tested in `PseudoQamModulator`)
 
 FEAT-011 — Implement Phase 2/3 advanced modulation modes (multi-channel/QAM-like)
 
-- Status: not-started
+- Status: completed
+- Done: 2026-08-30 (Phase 2 pseudo-QAM modulator, phase-2 frame builder, and calibration estimator are in place and verified by test suite)
 
 FEAT-012 — Add CI pipeline (GitHub Actions) to run `dotnet test`
 
@@ -122,6 +125,26 @@ FEAT-019 — Add shared application service layer in core for CLI/GUI/Web hosts
 
 - Status: completed
 - Done: 2026-08-28 (commit 8155500)
+
+FEAT-020 — Add CLI modulation-mode selector for Phase 1 and Phase 2 encoders
+
+- Status: completed
+- Done: 2026-08-30 (CLI accepts `--modulator` to switch between `phase1` and `phase2` implementations)
+
+FEAT-021 — Add Phase 2 frame round-trip integration coverage
+
+- Status: completed
+- Done: 2026-08-30 (Phase 2 frame construction, sampling, and data recovery are now covered by an integration-style round-trip test)
+
+CHORE-006 — Refresh the performance project to reflect the current modulation modes and project wiring
+
+- Status: completed
+- Done: 2026-08-30 (perf app now references the core project and supports `phase1` and `phase2` throughput estimates)
+
+CHORE-007 — Correct the Phase 2 perf capacity model to match the 12-bit macroblock density
+
+- Status: completed
+- Done: 2026-08-30 (perf capacity is now separated by modulator and uses the correct 12-bit Phase 2 payload density)
 
 Notes:
 

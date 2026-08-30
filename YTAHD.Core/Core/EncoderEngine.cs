@@ -72,77 +72,98 @@ namespace YTAHD.Core.Core
 
             async Task WriteFramePacketAsync(byte[] framePacket)
             {
-                // create surface
-                var info = new SKImageInfo(_width, _height, SKColorType.Rgba8888, SKAlphaType.Opaque);
-                using var surface = SKSurface.Create(info);
-                var canvas = surface.Canvas;
+                byte[] rgbFrame = null;
 
-                // optional: draw calibration border (simple checker border)
-                canvas.Clear(SKColors.Black);
-
-                for (int by = 0; by < blocksY; by++)
+                if (_modulator is PseudoQamModulator qamModulator)
                 {
-                    for (int bx = 0; bx < blocksX; bx++)
+                    var rgbaFrame = PseudoQamModulator.CreatePhase2Frame(_width, _height, borderWidth: 32, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
+                    rgbFrame = new byte[_width * _height * 3];
+                    for (int y = 0; y < _height; y++)
                     {
-                        int frameBitIndex = by * blocksX + bx;
-                        bool bit = false;
-                        if (frameBitIndex < framePacket.Length * 8)
+                        for (int x = 0; x < _width; x++)
                         {
-                            int byteIdx = frameBitIndex / 8;
-                            int bitInByte = 7 - (frameBitIndex % 8); // MSB first
-                            bit = ((framePacket[byteIdx] >> bitInByte) & 1) != 0;
+                            int srcIndex = (y * _width + x) * 4;
+                            int dstIndex = (y * _width + x) * 3;
+                            rgbFrame[dstIndex] = rgbaFrame[srcIndex];
+                            rgbFrame[dstIndex + 1] = rgbaFrame[srcIndex + 1];
+                            rgbFrame[dstIndex + 2] = rgbaFrame[srcIndex + 2];
+                        }
+                    }
+                }
+                else
+                {
+                    var info = new SKImageInfo(_width, _height, SKColorType.Rgba8888, SKAlphaType.Opaque);
+                    using var surface = SKSurface.Create(info);
+                    var canvas = surface.Canvas;
+
+                    canvas.Clear(SKColors.Black);
+
+                    for (int by = 0; by < blocksY; by++)
+                    {
+                        for (int bx = 0; bx < blocksX; bx++)
+                        {
+                            int frameBitIndex = by * blocksX + bx;
+                            bool bit = false;
+                            if (frameBitIndex < framePacket.Length * 8)
+                            {
+                                int byteIdx = frameBitIndex / 8;
+                                int bitInByte = 7 - (frameBitIndex % 8);
+                                bit = ((framePacket[byteIdx] >> bitInByte) & 1) != 0;
+                            }
+
+                            int x = bx * _macroblockSize;
+                            int y = by * _macroblockSize;
+                            var rect = new SKRectI(x, y, x + _macroblockSize, y + _macroblockSize);
+                            canvas.DrawRect(rect, bit ? paintWhite : paintBlack);
+                        }
+                    }
+
+                    using var image = surface.Snapshot();
+                    using var pixmap = image.PeekPixels();
+
+                    int rowBytes = _width * 3;
+                    int frameBytes = rowBytes * _height;
+                    int srcTotal = pixmap.RowBytes * _height;
+                    var srcBuf = ArrayPool<byte>.Shared.Rent(srcTotal);
+                    var dstBuf = ArrayPool<byte>.Shared.Rent(frameBytes);
+                    try
+                    {
+                        var srcPtr = pixmap.GetPixels();
+                        System.Runtime.InteropServices.Marshal.Copy(srcPtr, srcBuf, 0, srcTotal);
+
+                        Span<byte> srcSpan = srcBuf.AsSpan(0, srcTotal);
+                        Span<byte> dstSpan = dstBuf.AsSpan(0, frameBytes);
+
+                        for (int row = 0; row < _height; row++)
+                        {
+                            int srcRowStart = row * pixmap.RowBytes;
+                            int dstRowStart = row * rowBytes;
+                            for (int col = 0; col < _width; col++)
+                            {
+                                int srcIdx = srcRowStart + col * 4;
+                                int dstIdx = dstRowStart + col * 3;
+                                dstSpan[dstIdx] = srcSpan[srcIdx];
+                                dstSpan[dstIdx + 1] = srcSpan[srcIdx + 1];
+                                dstSpan[dstIdx + 2] = srcSpan[srcIdx + 2];
+                            }
                         }
 
-                        int x = bx * _macroblockSize;
-                        int y = by * _macroblockSize;
-                        var rect = new SKRectI(x, y, x + _macroblockSize, y + _macroblockSize);
-                        canvas.DrawRect(rect, bit ? paintWhite : paintBlack);
+                        rgbFrame = dstBuf.ToArray();
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(srcBuf);
+                        ArrayPool<byte>.Shared.Return(dstBuf);
                     }
                 }
 
-                // repeat each datagram frame 3x to stabilize inter-frame compression
-                using var image = surface.Snapshot();
-                using var pixmap = image.PeekPixels();
-
-                // copy RGBA -> RGB24 without unsafe code
-                int rowBytes = _width * 3;
-                int frameBytes = rowBytes * _height;
-                int srcTotal = pixmap.RowBytes * _height; // RGBA source bytes including possible padding
-                var srcBuf = ArrayPool<byte>.Shared.Rent(srcTotal);
-                var dstBuf = ArrayPool<byte>.Shared.Rent(frameBytes);
-                try
+                if (rgbFrame != null)
                 {
-                    var srcPtr = pixmap.GetPixels();
-                    System.Runtime.InteropServices.Marshal.Copy(srcPtr, srcBuf, 0, srcTotal);
-
-                    Span<byte> srcSpan = srcBuf.AsSpan(0, srcTotal);
-                    Span<byte> dstSpan = dstBuf.AsSpan(0, frameBytes);
-
-                    for (int row = 0; row < _height; row++)
-                    {
-                        int srcRowStart = row * pixmap.RowBytes;
-                        int dstRowStart = row * rowBytes;
-                        for (int col = 0; col < _width; col++)
-                        {
-                            int srcIdx = srcRowStart + col * 4; // RGBA
-                            int dstIdx = dstRowStart + col * 3; // RGB
-                            dstSpan[dstIdx] = srcSpan[srcIdx];
-                            dstSpan[dstIdx + 1] = srcSpan[srcIdx + 1];
-                            dstSpan[dstIdx + 2] = srcSpan[srcIdx + 2];
-                        }
-                    }
-
-                    // write the same RGB frame 3 times
                     for (int rep = 0; rep < 3; rep++)
                     {
-                        await stdin.WriteAsync(dstBuf, 0, frameBytes);
+                        await stdin.WriteAsync(rgbFrame, 0, rgbFrame.Length);
                         await stdin.FlushAsync();
                     }
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(srcBuf);
-                    ArrayPool<byte>.Shared.Return(dstBuf);
                 }
             }
 

@@ -1,4 +1,5 @@
 using System.Globalization;
+using YTAHD.Core.Modulation;
 
 namespace YTAHD.Perf;
 
@@ -47,6 +48,7 @@ internal sealed class PerfOptions
     public required int HeaderBytes { get; init; }
     public required bool CompareAll { get; init; }
     public required string Algorithm { get; init; }
+    public required string Modulator { get; init; }
     public required int RepeatCount { get; init; }
     public required int ParityGroupSize { get; init; }
     public required bool ShowHelp { get; init; }
@@ -85,6 +87,7 @@ internal sealed class PerfOptions
                 HeaderBytes = 0,
                 CompareAll = false,
                 Algorithm = "repeat",
+                Modulator = "phase1",
                 RepeatCount = 3,
                 ParityGroupSize = 4,
                 ShowHelp = true
@@ -101,6 +104,7 @@ internal sealed class PerfOptions
         int parityGroupSize = ParseInt(dict, "--parity-group", 4);
         bool compareAll = ParseBool(dict, "--compare", false);
         string algorithm = ParseString(dict, "--algorithm", "xor-parity");
+        string modulator = ParseString(dict, "--modulator", "phase1");
 
         if (payloadBytes <= 0) throw new ArgumentException("--payload-bytes must be > 0.");
         if (width <= 0 || height <= 0) throw new ArgumentException("--width and --height must be > 0.");
@@ -109,6 +113,11 @@ internal sealed class PerfOptions
         if (headerBytes <= 0) throw new ArgumentException("--header-bytes must be > 0.");
         if (repeatCount <= 0) throw new ArgumentException("--repeat must be > 0.");
         if (parityGroupSize <= 0) throw new ArgumentException("--parity-group must be > 0.");
+        if (!string.Equals(modulator, "phase1", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(modulator, "phase2", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("--modulator must be one of: phase1, phase2.");
+        }
 
         return new PerfOptions
         {
@@ -120,6 +129,7 @@ internal sealed class PerfOptions
             HeaderBytes = headerBytes,
             CompareAll = compareAll,
             Algorithm = algorithm,
+            Modulator = modulator,
             RepeatCount = repeatCount,
             ParityGroupSize = parityGroupSize,
             ShowHelp = false
@@ -235,7 +245,14 @@ internal sealed class MetricsCalculator
         if (blocksX <= 0 || blocksY <= 0)
             throw new ArgumentException("Invalid geometry. Macroblock is larger than frame dimensions.");
 
-        long bitsPerFrame = (long)blocksX * blocksY;
+        long bitsPerMacroblock = options.Modulator.ToLowerInvariant() switch
+        {
+            "phase1" => 1L,
+            "phase2" => 12L,
+            _ => throw new ArgumentException($"Unsupported modulator '{options.Modulator}'.")
+        };
+
+        long bitsPerFrame = (long)blocksX * blocksY * bitsPerMacroblock;
         int framePacketBytes = (int)(bitsPerFrame / 8);
         int framePayloadNetBytes = framePacketBytes - options.HeaderBytes;
         if (framePayloadNetBytes <= 0)
@@ -338,6 +355,7 @@ internal static class PerfReportPrinter
     {
         Console.WriteLine("YTAHD Performance Analysis");
         Console.WriteLine($"Geometry: {options.Width}x{options.Height}, macroblock {options.MacroblockSize}, fps {options.Fps}");
+        Console.WriteLine($"Modulator: {options.Modulator}");
         Console.WriteLine($"Requested payload: {FormatBytes(options.PayloadBytes)}");
         Console.WriteLine();
 
@@ -385,6 +403,7 @@ internal static class PerfReportPrinter
         Console.WriteLine("  --repeat <n>           Physical repeat count per logical frame (default 3)");
         Console.WriteLine("  --parity-group <n>     Data frames per parity frame for xor-parity (default 4)");
         Console.WriteLine("  --algorithm <name>     repeat | xor-parity (default xor-parity)");
+        Console.WriteLine("  --modulator <name>     phase1 | phase2 (default phase1)");
         Console.WriteLine("  --compare true|false   Compare repeat(x1), repeat(xN), xor-parity (default false)");
         Console.WriteLine("  --help                 Show this help");
         Console.WriteLine();

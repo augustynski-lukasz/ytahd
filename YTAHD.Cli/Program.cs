@@ -6,6 +6,16 @@ using System.Threading.Tasks;
 using YTAHD.Core.Application;
 using YTAHD.Core.Modulation;
 
+static IModulator CreateModulator(string mode)
+{
+    return mode.Trim().ToLowerInvariant() switch
+    {
+        "phase2" or "pseudo-qam" or "qam" => new PseudoQamModulator(),
+        "phase1" or "binary" or "grid" or "default" or "" => new BinaryGridModulator(),
+        _ => throw new ArgumentException($"Unsupported modulation mode '{mode}'. Use 'phase1' or 'phase2'.", nameof(mode))
+    };
+}
+
 // Build a simple command line with extensible options (future-friendly)
 var root = new RootCommand("YTAHD - encode/decode binary data into resilient video frames");
 
@@ -19,15 +29,17 @@ var optMacro = new Option<int>(new[] { "--macroblock-size", "-m" }, () => 16, "M
 var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output video width");
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
+var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1' or 'phase2'");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
 encodeCommand.AddOption(optFps);
+encodeCommand.AddOption(optModulator);
 
-encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockSize, int width, int height, int fps) =>
+encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockSize, int width, int height, int fps, string modulatorName) =>
 {
-    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}]");
-    IModulator modulator = new BinaryGridModulator();
+    var modulator = CreateModulator(modulatorName);
+    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}] ");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory());
     await service.EncodeAsync(new EncodeOptions
     {
@@ -39,17 +51,19 @@ encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockS
         Fps = fps,
         VerifyFfmpeg = true
     });
-}, argIn, argOut, optMacro, optWidth, optHeight, optFps);
+}, argIn, argOut, optMacro, optWidth, optHeight, optFps, optModulator);
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
 var decodeOut = new Argument<FileInfo>("output") { Arity = ArgumentArity.ExactlyOne };
 var decodeCommand = new Command("decode", "Decode a video back into a binary file");
 decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
-decodeCommand.SetHandler(async (FileInfo input, FileInfo output) =>
+var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1' or 'phase2'");
+decodeCommand.AddOption(decodeModulator);
+decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName) =>
 {
-    Console.WriteLine($"Decode: {input} -> {output}");
-    IModulator modulator = new BinaryGridModulator();
+    var modulator = CreateModulator(modulatorName);
+    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}]");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory());
     await service.DecodeAsync(new DecodeOptions
     {
@@ -57,7 +71,7 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output) =>
         OutputFile = output.FullName,
         VerifyFfmpeg = true
     });
-}, decodeIn, decodeOut);
+}, decodeIn, decodeOut, decodeModulator);
 
 root.AddCommand(encodeCommand);
 root.AddCommand(decodeCommand);
