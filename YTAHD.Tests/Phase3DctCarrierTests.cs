@@ -117,5 +117,32 @@ namespace YTAHD.Tests
                 File.Delete(input);
             }
         }
+
+        [Fact]
+        public void DctModulator_Phase3_Capacity_Matches_Separate_PerFrame_Calculation()
+        {
+            const int width = 3840;
+            const int height = 2160;
+            const int borderWidth = 32;
+
+            int usableWidth = Math.Max(0, width - borderWidth * 2);
+            int usableHeight = Math.Max(0, height - borderWidth * 2);
+            int dctBlocksX = usableWidth / 8;
+            int dctBlocksY = usableHeight / 8;
+            int expectedPayloadBytesPerFrame = dctBlocksX * dctBlocksY * 16;
+
+            var payload = Enumerable.Range(0, expectedPayloadBytesPerFrame)
+                .Select(i => (byte)(i % 251))
+                .ToArray();
+
+            var frame = DctModulator.CreatePhase3Frame(width, height, borderWidth, payload);
+
+            Assert.Equal(width * height * 4, frame.Length);
+            Assert.Equal(expectedPayloadBytesPerFrame, payload.Length);
+            Assert.Equal(payload[0], frame[((borderWidth + 0) * width + (borderWidth + 0)) * 4 + 0]);
+            Assert.Equal(payload[1], frame[((borderWidth + 0) * width + (borderWidth + 1)) * 4 + 0]);
+            Assert.Equal(payload[15], frame[((borderWidth + 3) * width + (borderWidth + 3)) * 4 + 0]);
+            Assert.Equal(0, frame[((borderWidth + 6) * width + (borderWidth + 6)) * 4 + 0]);
+        }
     }
 }

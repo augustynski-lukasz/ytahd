@@ -246,19 +246,8 @@ internal sealed class MetricsCalculator
         if (blocksX <= 0 || blocksY <= 0)
             throw new ArgumentException("Invalid geometry. Macroblock is larger than frame dimensions.");
 
-        long bitsPerMacroblock = options.Modulator.ToLowerInvariant() switch
-        {
-            "phase1" => 1L,
-            "phase2" => 12L,
-            "phase3" => 8L,
-            _ => throw new ArgumentException($"Unsupported modulator '{options.Modulator}'.")
-        };
-
-        long bitsPerFrame = (long)blocksX * blocksY * bitsPerMacroblock;
-        int framePacketBytes = (int)(bitsPerFrame / 8);
-        int framePayloadNetBytes = framePacketBytes - options.HeaderBytes;
-        if (framePayloadNetBytes <= 0)
-            throw new ArgumentException("Frame payload net bytes must be > 0. Lower header or increase frame capacity.");
+        int framePayloadNetBytes = CalculatePayloadNetBytesPerFrame(options);
+        int framePacketBytes = framePayloadNetBytes + options.HeaderBytes;
 
         long dataFrames = (options.PayloadBytes + framePayloadNetBytes - 1) / framePayloadNetBytes;
         long parityFrames = algorithm.CalculateParityFrames(dataFrames);
@@ -310,6 +299,57 @@ internal sealed class MetricsCalculator
             DataBandwidthBps = dataBandwidthBps,
             EffectiveDataToVideoPercent = Percent(options.PayloadBytes, videoTotalBytes)
         };
+    }
+
+    private static int CalculatePayloadNetBytesPerFrame(PerfOptions options)
+    {
+        return options.Modulator.ToLowerInvariant() switch
+        {
+            "phase1" =>
+                CalculatePhase1PayloadBytesPerFrame(options),
+            "phase2" =>
+                CalculatePhase2PayloadBytesPerFrame(options),
+            "phase3" =>
+                CalculatePhase3PayloadBytesPerFrame(options),
+            _ => throw new ArgumentException($"Unsupported modulator '{options.Modulator}'.")
+        };
+    }
+
+    private static int CalculatePhase1PayloadBytesPerFrame(PerfOptions options)
+    {
+        long bitsPerFrame = (long)(options.Width / options.MacroblockSize) * (options.Height / options.MacroblockSize);
+        int payloadBytes = (int)(bitsPerFrame / 8);
+        if (payloadBytes <= 0)
+            throw new ArgumentException("Frame payload net bytes must be > 0. Lower header or increase frame capacity.");
+        return payloadBytes - options.HeaderBytes;
+    }
+
+    private static int CalculatePhase2PayloadBytesPerFrame(PerfOptions options)
+    {
+        long bitsPerFrame = (long)(options.Width / options.MacroblockSize) * (options.Height / options.MacroblockSize) * 12L;
+        int payloadBytes = (int)(bitsPerFrame / 8);
+        if (payloadBytes <= 0)
+            throw new ArgumentException("Frame payload net bytes must be > 0. Lower header or increase frame capacity.");
+        return payloadBytes - options.HeaderBytes;
+    }
+
+    private static int CalculatePhase3PayloadBytesPerFrame(PerfOptions options)
+    {
+        const int borderWidth = 32;
+        int usableWidth = Math.Max(0, options.Width - borderWidth * 2);
+        int usableHeight = Math.Max(0, options.Height - borderWidth * 2);
+
+        int dctBlocksX = usableWidth / 8;
+        int dctBlocksY = usableHeight / 8;
+        if (dctBlocksX <= 0 || dctBlocksY <= 0)
+            throw new ArgumentException("Phase 3 carrier geometry is invalid for the requested frame size.");
+
+        const int payloadBytesPerDctBlock = 4 * 4;
+        int payloadBytes = dctBlocksX * dctBlocksY * payloadBytesPerDctBlock;
+        if (payloadBytes <= 0)
+            throw new ArgumentException("Phase 3 frame payload net bytes must be > 0. Lower header or increase frame capacity.");
+
+        return payloadBytes;
     }
 
     private static double Percent(double part, double total)
