@@ -19,12 +19,23 @@ namespace YTAHD.Core.Modulation
         /// Returns how many payload bytes can fit in a single frame for the selected modulation geometry,
         /// excluding the fixed frame header size.
         /// </summary>
-        int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0);
+        int GetPayloadBytesPerFrame(ModulatorGeometry geometry);
+
+        /// <summary>
+        /// Returns the buffer size required to hold the decoded packet payload and metadata for a frame.
+        /// Implementations can account for their own encoding-specific geometry and packet framing.
+        /// </summary>
+        int GetPacketBufferLength(ModulatorGeometry geometry, int payloadBytesPerFrame);
+
+        /// <summary>
+        /// Returns the fixed border width that the modulator reserves when painting or parsing frames.
+        /// </summary>
+        int GetBorderWidth(ModulatorGeometry geometry);
 
         /// <summary>
         /// Render an RGBA frame for the selected modulation layout using the given payload bytes.
         /// </summary>
-        byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload);
+        byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload);
 
         /// <summary>
         /// Encode input bytes into a pixel buffer. Pixel buffer must be large enough for a single macroblock frame (width*height*bytesPerPixel).

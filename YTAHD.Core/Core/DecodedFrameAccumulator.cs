@@ -29,10 +29,11 @@ namespace YTAHD.Core.Core
             int bitsPerFrame,
             IModulator modulator)
         {
-            int framePacketBytes = modulator is PseudoQamModulator ? Math.Max(bitsPerFrame, FramePacket.HeaderBytes) : FramePacket.HeaderBytes + payloadBytesPerFrame;
+            var geometry = new ModulatorGeometry(width, height, macroblockSize, FramePacket.HeaderBytes, BitsPerFrame: bitsPerFrame);
+            int framePacketBytes = modulator.GetPacketBufferLength(geometry, payloadBytesPerFrame);
             var packet = new byte[framePacketBytes];
 
-            int borderWidth = modulator is PseudoQamModulator ? 32 : 0;
+            int borderWidth = modulator.GetBorderWidth(geometry with { BorderWidth = 0 });
             var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 

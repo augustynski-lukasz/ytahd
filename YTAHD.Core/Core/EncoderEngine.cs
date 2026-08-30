@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using SkiaSharp;
+using YTAHD.Core.Application;
 using YTAHD.Core.Modulation;
 using YTAHD.Core.Infrastructure;
 
@@ -34,6 +35,11 @@ namespace YTAHD.Core.Core
             _width = width;
             _height = height;
             _fps = fps;
+        }
+
+        public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
+            : this(modulator, ffmpeg, options.MacroblockSize, options.Width, options.Height, options.Fps)
+        {
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -74,8 +80,10 @@ namespace YTAHD.Core.Core
 
             var data = await File.ReadAllBytesAsync(inputFile);
 
-            int borderWidth = _modulator is BinaryGridModulator ? 0 : 32;
-            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(_width, _height, HeaderBytes, borderWidth, _macroblockSize);
+            var geometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, BitsPerFrame: 0);
+            int borderWidth = _modulator.GetBorderWidth(geometry);
+            geometry = geometry with { BorderWidth = borderWidth };
+            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(geometry);
             if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
 
@@ -94,7 +102,8 @@ namespace YTAHD.Core.Core
 
             async Task WriteFramePacketAsync(byte[] framePacket)
             {
-                byte[] rgbaFrame = _modulator.CreateFrame(_width, _height, borderWidth, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
+                var frameGeometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, borderWidth);
+                byte[] rgbaFrame = _modulator.CreateFrame(frameGeometry, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
                 byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
 
                 for (int rep = 0; rep < 3; rep++)

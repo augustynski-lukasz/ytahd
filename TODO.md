@@ -259,6 +259,12 @@ REFACTOR-001 — Extract the frame-packet parser/validator into a dedicated help
 - Status: completed
 - Done: 2026-08-30 (FramePacket parser/validator extracted and edge-case coverage is in place)
 
+REFACTOR-002 — Consolidate duplicated codec option objects and route modulator geometry through a single shared contract
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: `EncodeOptions` and `DecodeOptions` now share a common `VideoCodecOptions` base; `IModulator` methods accept a shared `ModulatorGeometry` object instead of a long tuple of width/height/macroblock/header/border arguments, keeping the encode/decode pipeline easier to extend and less error-prone
+
 REFACTOR-002 — Split algorithm-specific bit decoding from the frame accumulator and parity logic
 
 - Status: completed

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
+using YTAHD.Core.Application;
 using YTAHD.Core.Modulation;
 using YTAHD.Core.Infrastructure;
 
@@ -32,6 +33,11 @@ namespace YTAHD.Core.Core
             _width = width;
             _height = height;
             _fps = fps;
+        }
+
+        public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
+            : this(modulator, ffmpeg, options.MacroblockSize, options.Width, options.Height, options.Fps)
+        {
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -100,11 +106,12 @@ namespace YTAHD.Core.Core
             IModulator modulator,
             out byte[] packet)
         {
-            int payloadBytesPerFrame = modulator.GetPayloadBytesPerFrame(width, height, HeaderBytes, 0, macroblockSize);
-            int framePacketBytes = modulator is PseudoQamModulator ? Math.Max(bitsPerFrame, HeaderBytes) : HeaderBytes + payloadBytesPerFrame;
+            var geometry = new ModulatorGeometry(width, height, macroblockSize, HeaderBytes, BitsPerFrame: bitsPerFrame);
+            int payloadBytesPerFrame = modulator.GetPayloadBytesPerFrame(geometry);
+            int framePacketBytes = modulator.GetPacketBufferLength(geometry, payloadBytesPerFrame);
             packet = new byte[framePacketBytes];
 
-            int borderWidth = modulator is PseudoQamModulator ? 32 : 0;
+            int borderWidth = modulator.GetBorderWidth(geometry with { BorderWidth = 0 });
             var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 

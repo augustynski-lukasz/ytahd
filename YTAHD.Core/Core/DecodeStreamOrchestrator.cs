@@ -33,7 +33,8 @@ namespace YTAHD.Core.Core
             if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
 
-            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(_width, _height, FramePacket.HeaderBytes, 0, _macroblockSize);
+            var geometry = new ModulatorGeometry(_width, _height, _macroblockSize, FramePacket.HeaderBytes, BitsPerFrame: 0);
+            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(geometry);
             if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
 
@@ -42,7 +43,8 @@ namespace YTAHD.Core.Core
             int blocksX = _width / _macroblockSize;
             int blocksY = _height / _macroblockSize;
             int bitsPerFrame = blocksX * blocksY;
-            int packetByteLength = _modulator is PseudoQamModulator ? Math.Max(bitsPerFrame, FramePacket.HeaderBytes) : FramePacket.HeaderBytes + payloadBytesPerFrame;
+            var packetGeometry = geometry with { BitsPerFrame = bitsPerFrame };
+            int packetByteLength = _modulator.GetPacketBufferLength(packetGeometry, payloadBytesPerFrame);
 
             var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
@@ -54,7 +56,7 @@ namespace YTAHD.Core.Core
             {
                 var packet = new byte[packetByteLength];
                 var strategy = FrameBitDecoderFactory.CreateForModulator(_modulator);
-                int borderWidth = _modulator is PseudoQamModulator ? 32 : 0;
+                int borderWidth = _modulator.GetBorderWidth(packetGeometry with { BorderWidth = 0 });
                 strategy.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
                 return packet;
             }

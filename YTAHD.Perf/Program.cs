@@ -326,11 +326,16 @@ internal sealed class MetricsCalculator
 
     private static int CalculatePhase2PayloadBytesPerFrame(PerfOptions options)
     {
-        long bitsPerFrame = (long)(options.Width / options.MacroblockSize) * (options.Height / options.MacroblockSize) * 12L;
-        int payloadBytes = (int)(bitsPerFrame / 8);
+        int blocksX = options.Width / options.MacroblockSize;
+        int blocksY = options.Height / options.MacroblockSize;
+        if (blocksX <= 0 || blocksY <= 0)
+            throw new ArgumentException("Phase 2 carrier geometry is invalid for the requested frame size.");
+
+        int payloadBytes = blocksX * blocksY;
         if (payloadBytes <= 0)
             throw new ArgumentException("Frame payload net bytes must be > 0. Lower header or increase frame capacity.");
-        return payloadBytes - options.HeaderBytes;
+
+        return Math.Max(0, payloadBytes - options.HeaderBytes);
     }
 
     private static int CalculatePhase3PayloadBytesPerFrame(PerfOptions options)

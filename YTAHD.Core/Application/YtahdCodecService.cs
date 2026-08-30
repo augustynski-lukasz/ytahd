@@ -23,7 +23,7 @@ public sealed class YtahdCodecService
         if (string.IsNullOrWhiteSpace(options.OutputVideo)) throw new ArgumentException("OutputVideo is required.", nameof(options));
 
         var ffmpeg = _ffmpegFactory.CreateForEncode(options.Width, options.Height, options.Fps);
-        var engine = new EncoderEngine(_modulator, ffmpeg, options.MacroblockSize, options.Width, options.Height, options.Fps);
+        var engine = new EncoderEngine(_modulator, ffmpeg, options);
 
         if (options.VerifyFfmpeg)
         {
@@ -40,7 +40,7 @@ public sealed class YtahdCodecService
         if (string.IsNullOrWhiteSpace(options.OutputFile)) throw new ArgumentException("OutputFile is required.", nameof(options));
 
         var ffmpeg = _ffmpegFactory.CreateForDecode();
-        var engine = new DecoderEngine(_modulator, ffmpeg, options.MacroblockSize, options.Width, options.Height, options.Fps);
+        var engine = new DecoderEngine(_modulator, ffmpeg, options);
 
         if (options.VerifyFfmpeg)
         {

@@ -47,6 +47,23 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public void PacketBufferLength_Is_Derived_From_Modulator_Contract()
+        {
+            const int width = 640;
+            const int height = 480;
+            const int headerBytes = 51;
+
+            var binary = new BinaryGridModulator();
+            var pseudo = new PseudoQamModulator();
+
+            int binaryPayload = binary.GetPayloadBytesPerFrame(width, height, headerBytes, borderWidth: 0, macroblockSize: binary.MacroblockWidth);
+            int pseudoPayload = pseudo.GetPayloadBytesPerFrame(width, height, headerBytes, borderWidth: 0, macroblockSize: pseudo.MacroblockWidth);
+
+            Assert.Equal(headerBytes + binaryPayload, binary.GetPacketBufferLength(width, height, headerBytes, binaryPayload, 0, binary.MacroblockWidth));
+            Assert.Equal(Math.Max((width / pseudo.MacroblockWidth) * (height / pseudo.MacroblockHeight), headerBytes), pseudo.GetPacketBufferLength(width, height, headerBytes, pseudoPayload, (width / pseudo.MacroblockWidth) * (height / pseudo.MacroblockHeight), pseudo.MacroblockWidth));
+        }
+
+        [Fact]
         public void PseudoQam_PerFrame_Capacity_Matches_Block_Count_Contract()
         {
             const int width = 640;

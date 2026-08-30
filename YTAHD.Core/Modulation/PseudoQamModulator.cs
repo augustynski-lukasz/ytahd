@@ -13,21 +13,54 @@ namespace YTAHD.Core.Modulation
         public int MacroblockWidth => 16;
         public int MacroblockHeight => 16;
 
-        public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+        public int GetPayloadBytesPerFrame(ModulatorGeometry geometry)
         {
-            if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-            if (headerBytes < 0) throw new ArgumentOutOfRangeException(nameof(headerBytes));
-            if (borderWidth < 0) throw new ArgumentOutOfRangeException(nameof(borderWidth));
+            if (geometry.Width <= 0 || geometry.Height <= 0) throw new ArgumentOutOfRangeException(nameof(geometry));
+            if (geometry.HeaderBytes < 0) throw new ArgumentOutOfRangeException(nameof(geometry));
+            if (geometry.BorderWidth < 0) throw new ArgumentOutOfRangeException(nameof(geometry));
 
-            int blockWidth = macroblockSize > 0 ? macroblockSize : MacroblockWidth;
-            int blockHeight = macroblockSize > 0 ? macroblockSize : MacroblockHeight;
-            int usableWidth = Math.Max(0, width - (borderWidth * 2));
-            int usableHeight = Math.Max(0, height - (borderWidth * 2));
+            int blockWidth = geometry.MacroblockSize > 0 ? geometry.MacroblockSize : MacroblockWidth;
+            int blockHeight = geometry.MacroblockSize > 0 ? geometry.MacroblockSize : MacroblockHeight;
+            int usableWidth = Math.Max(0, geometry.Width - (geometry.BorderWidth * 2));
+            int usableHeight = Math.Max(0, geometry.Height - (geometry.BorderWidth * 2));
             int blocksX = Math.Max(1, usableWidth / blockWidth);
             int blocksY = Math.Max(1, usableHeight / blockHeight);
             int payloadBytesPerFrame = blocksX * blocksY;
-            int capacityAfterHeader = payloadBytesPerFrame - headerBytes;
+            int capacityAfterHeader = payloadBytesPerFrame - geometry.HeaderBytes;
             return Math.Max(0, capacityAfterHeader);
+        }
+
+        public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+        {
+            return GetPayloadBytesPerFrame(new ModulatorGeometry(width, height, macroblockSize > 0 ? macroblockSize : MacroblockWidth, headerBytes, borderWidth));
+        }
+
+        public int GetPacketBufferLength(ModulatorGeometry geometry, int payloadBytesPerFrame)
+        {
+            _ = payloadBytesPerFrame;
+            return Math.Max(geometry.BitsPerFrame, geometry.HeaderBytes);
+        }
+
+        public int GetPacketBufferLength(int width, int height, int headerBytes, int payloadBytesPerFrame, int bitsPerFrame, int macroblockSize = 0)
+        {
+            _ = width;
+            _ = height;
+            _ = macroblockSize;
+            return Math.Max(bitsPerFrame, headerBytes);
+        }
+
+        public int GetBorderWidth(ModulatorGeometry geometry)
+        {
+            _ = geometry;
+            return 32;
+        }
+
+        public int GetBorderWidth(int width, int height, int macroblockSize = 0)
+        {
+            _ = width;
+            _ = height;
+            _ = macroblockSize;
+            return 32;
         }
 
         private const int PamLevels = 16;
@@ -90,6 +123,11 @@ namespace YTAHD.Core.Modulation
                     rgbaBuffer[idx + 3] = 255;
                 }
             }
+        }
+
+        public byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
+        {
+            return CreatePhase2Frame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
         }
 
         public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)

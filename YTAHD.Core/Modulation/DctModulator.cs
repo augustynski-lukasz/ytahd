@@ -15,23 +15,57 @@ namespace YTAHD.Core.Modulation
         public int MacroblockWidth => BasisSize;
         public int MacroblockHeight => BasisSize;
 
-        public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+        public int GetPayloadBytesPerFrame(ModulatorGeometry geometry)
         {
-            if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-            if (headerBytes < 0) throw new ArgumentOutOfRangeException(nameof(headerBytes));
-            if (borderWidth < 0) throw new ArgumentOutOfRangeException(nameof(borderWidth));
+            if (geometry.Width <= 0 || geometry.Height <= 0) throw new ArgumentOutOfRangeException(nameof(geometry));
+            if (geometry.HeaderBytes < 0) throw new ArgumentOutOfRangeException(nameof(geometry));
+            if (geometry.BorderWidth < 0) throw new ArgumentOutOfRangeException(nameof(geometry));
 
-            int usableWidth = Math.Max(0, width - (borderWidth * 2));
-            int usableHeight = Math.Max(0, height - (borderWidth * 2));
+            int usableWidth = Math.Max(0, geometry.Width - (geometry.BorderWidth * 2));
+            int usableHeight = Math.Max(0, geometry.Height - (geometry.BorderWidth * 2));
             int dctBlocksX = Math.Max(1, usableWidth / BasisSize);
             int dctBlocksY = Math.Max(1, usableHeight / BasisSize);
             int payloadBytesPerFrame = dctBlocksX * dctBlocksY * Cutoff * Cutoff;
-            if (headerBytes > 0)
+            if (geometry.HeaderBytes > 0)
             {
-                payloadBytesPerFrame = Math.Max(0, payloadBytesPerFrame - headerBytes);
+                payloadBytesPerFrame = Math.Max(0, payloadBytesPerFrame - geometry.HeaderBytes);
             }
 
             return payloadBytesPerFrame;
+        }
+
+        public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+        {
+            return GetPayloadBytesPerFrame(new ModulatorGeometry(width, height, macroblockSize > 0 ? macroblockSize : MacroblockWidth, headerBytes, borderWidth));
+        }
+
+        public int GetPacketBufferLength(ModulatorGeometry geometry, int payloadBytesPerFrame)
+        {
+            _ = payloadBytesPerFrame;
+            return geometry.HeaderBytes + payloadBytesPerFrame;
+        }
+
+        public int GetPacketBufferLength(int width, int height, int headerBytes, int payloadBytesPerFrame, int bitsPerFrame, int macroblockSize = 0)
+        {
+            _ = width;
+            _ = height;
+            _ = bitsPerFrame;
+            _ = macroblockSize;
+            return headerBytes + payloadBytesPerFrame;
+        }
+
+        public int GetBorderWidth(ModulatorGeometry geometry)
+        {
+            _ = geometry;
+            return 32;
+        }
+
+        public int GetBorderWidth(int width, int height, int macroblockSize = 0)
+        {
+            _ = width;
+            _ = height;
+            _ = macroblockSize;
+            return 32;
         }
 
         public void Encode(ReadOnlySpan<byte> input, Span<byte> pixelBuffer)
@@ -70,6 +104,11 @@ namespace YTAHD.Core.Modulation
                     pixelBuffer[y * BasisSize + x] = 128;
                 }
             }
+        }
+
+        public byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
+        {
+            return CreatePhase3Frame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
         }
 
         public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
