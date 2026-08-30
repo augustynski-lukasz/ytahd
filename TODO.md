@@ -186,6 +186,26 @@ FEAT-029 — Centralize RGB/RGBA conversion and buffer handling for encoder path
 - Status: completed
 - Done: 2026-08-30
 
+FEAT-030 — Add a shared frame-packet parser and capacity helper to the decoder path
+
+- Status: completed
+- Done: 2026-08-30
+
+FEAT-031 — Extract raw RGB sampling and bit extraction into a dedicated decoder strategy per modulator
+
+- Status: completed
+- Done: 2026-08-30
+
+FEAT-032 — Split de-duplication, parity recovery, and payload assembly into dedicated helper methods
+
+- Status: completed
+- Done: 2026-08-30
+
+FEAT-033 — Add a protocol-level validation test matrix that checks encoder/decoder packet compatibility end-to-end
+
+- Status: completed
+- Done: 2026-08-30
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

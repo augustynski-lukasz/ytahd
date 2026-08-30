@@ -7,8 +7,20 @@ namespace YTAHD.Core.Modulation
     /// </summary>
     public sealed class BinaryGridModulator : IModulator
     {
-        public int MacroblockWidth => 16;
-        public int MacroblockHeight => 16;
+        private readonly int _macroblockWidth;
+        private readonly int _macroblockHeight;
+
+        public BinaryGridModulator(int macroblockWidth = 1, int macroblockHeight = 1)
+        {
+            if (macroblockWidth <= 0) throw new ArgumentOutOfRangeException(nameof(macroblockWidth));
+            if (macroblockHeight <= 0) throw new ArgumentOutOfRangeException(nameof(macroblockHeight));
+
+            _macroblockWidth = macroblockWidth;
+            _macroblockHeight = macroblockHeight;
+        }
+
+        public int MacroblockWidth => _macroblockWidth;
+        public int MacroblockHeight => _macroblockHeight;
 
         public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
         {
@@ -16,8 +28,8 @@ namespace YTAHD.Core.Modulation
             if (headerBytes < 0) throw new ArgumentOutOfRangeException(nameof(headerBytes));
             if (borderWidth < 0) throw new ArgumentOutOfRangeException(nameof(borderWidth));
 
-            int blockWidth = macroblockSize > 0 ? macroblockSize : MacroblockWidth;
-            int blockHeight = macroblockSize > 0 ? macroblockSize : MacroblockHeight;
+            int blockWidth = macroblockSize > 0 ? macroblockSize : _macroblockWidth;
+            int blockHeight = macroblockSize > 0 ? macroblockSize : _macroblockHeight;
             int usableWidth = Math.Max(0, width - (borderWidth * 2));
             int usableHeight = Math.Max(0, height - (borderWidth * 2));
             int blocksX = Math.Max(1, usableWidth / blockWidth);
@@ -33,22 +45,31 @@ namespace YTAHD.Core.Modulation
             if (borderWidth < 0 || borderWidth > Math.Min(width, height) / 2) throw new ArgumentOutOfRangeException(nameof(borderWidth));
 
             var frame = new byte[width * height * 4];
-            int blocksX = Math.Max(1, (width - (borderWidth * 2)) / MacroblockWidth);
-            int blocksY = Math.Max(1, (height - (borderWidth * 2)) / MacroblockHeight);
-            int payloadIndex = 0;
+            int blocksX = Math.Max(1, (width - (borderWidth * 2)) / _macroblockWidth);
+            int blocksY = Math.Max(1, (height - (borderWidth * 2)) / _macroblockHeight);
+            int totalBits = blocksX * blocksY;
 
-            for (int by = 0; by < blocksY && payloadIndex < payload.Length; by++)
+            for (int by = 0; by < blocksY; by++)
             {
-                for (int bx = 0; bx < blocksX && payloadIndex < payload.Length; bx++)
+                for (int bx = 0; bx < blocksX; bx++)
                 {
-                    int x = borderWidth + (bx * MacroblockWidth);
-                    int y = borderWidth + (by * MacroblockHeight);
-                    byte value = payload[payloadIndex++];
-                    byte bit = (byte)((value & 0x80) != 0 ? 255 : 0);
-
-                    for (int py = 0; py < MacroblockHeight; py++)
+                    int bitIndex = (by * blocksX) + bx;
+                    if (bitIndex >= totalBits || bitIndex >= payload.Length * 8)
                     {
-                        for (int px = 0; px < MacroblockWidth; px++)
+                        continue;
+                    }
+
+                    int byteIndex = bitIndex / 8;
+                    int bitInByte = 7 - (bitIndex % 8);
+                    bool bit = ((payload[byteIndex] >> bitInByte) & 1) == 1;
+                    byte value = bit ? (byte)255 : (byte)0;
+
+                    int x = borderWidth + (bx * _macroblockWidth);
+                    int y = borderWidth + (by * _macroblockHeight);
+
+                    for (int py = 0; py < _macroblockHeight; py++)
+                    {
+                        for (int px = 0; px < _macroblockWidth; px++)
                         {
                             int screenX = x + px;
                             int screenY = y + py;
@@ -56,9 +77,9 @@ namespace YTAHD.Core.Modulation
                                 continue;
 
                             int idx = (screenY * width + screenX) * 4;
-                            frame[idx + 0] = bit;
-                            frame[idx + 1] = bit;
-                            frame[idx + 2] = bit;
+                            frame[idx + 0] = value;
+                            frame[idx + 1] = value;
+                            frame[idx + 2] = value;
                             frame[idx + 3] = 255;
                         }
                     }

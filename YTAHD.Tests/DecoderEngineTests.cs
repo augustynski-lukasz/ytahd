@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Xunit;
 using YTAHD.Core.Modulation;
@@ -13,6 +14,85 @@ namespace YTAHD.Tests
         private const int Height = 64;
         private const int Macroblock = 1;
         private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
+
+        [Fact]
+        public void TryParseFramePacket_Parses_Header_And_Payload()
+        {
+            var payload = new byte[] { 10, 20, 30, 40 };
+            var packet = new byte[51 + payload.Length];
+            packet[0] = 0x59;
+            packet[1] = 0x54;
+            packet[2] = 1;
+            packet[3] = 0;
+            packet[4] = 0;
+            packet[5] = 0;
+            packet[6] = 0;
+            packet[7] = 7;
+            packet[8] = 0;
+            packet[9] = 0;
+            packet[10] = 0;
+            packet[11] = 12;
+            packet[12] = 0;
+            packet[13] = 0;
+            packet[14] = 0;
+            packet[15] = 3;
+            packet[16] = 4;
+            packet[17] = 0;
+            packet[18] = 4;
+            var hash = SHA256.HashData(payload);
+            Buffer.BlockCopy(hash, 0, packet, 19, hash.Length);
+            Buffer.BlockCopy(payload, 0, packet, 51, payload.Length);
+
+            var parsed = DecoderEngine.TryParseFramePacket(packet, out var frameType, out var frameIndex, out var totalDataFrames, out var groupStart, out var groupCount, out var payloadLength, out var parsedPayload);
+
+            Assert.True(parsed);
+            Assert.Equal(0, frameType);
+            Assert.Equal(7, frameIndex);
+            Assert.Equal(12, totalDataFrames);
+            Assert.Equal(3, groupStart);
+            Assert.Equal(4, groupCount);
+            Assert.Equal(4, payloadLength);
+            Assert.Equal(payload, parsedPayload);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(4)]
+        [InlineData(16)]
+        [InlineData(127)]
+        public void EncoderPacketCompatibility_Matrix_Parses_And_Validates_Data_And_Parity_Packets(int payloadLength)
+        {
+            var payload = new byte[payloadLength];
+            for (int i = 0; i < payload.Length; i++)
+            {
+                payload[i] = (byte)((i * 31 + 7) % 251);
+            }
+
+            var dataPacket = EncoderEngine.CreateDataFramePacket(7, 12, 3, 4, payload.Length, payload, payloadLength);
+            var parsedData = DecoderEngine.TryParseFramePacket(dataPacket, out var dataType, out var dataFrameIndex, out var totalFrames, out var groupStart, out var groupCount, out var dataLen, out var parsedPayload);
+
+            Assert.True(parsedData);
+            Assert.Equal((byte)0, dataType);
+            Assert.Equal(7, dataFrameIndex);
+            Assert.Equal(12, totalFrames);
+            Assert.Equal(3, groupStart);
+            Assert.Equal(4, groupCount);
+            Assert.Equal(payloadLength, dataLen);
+            Assert.Equal(payload, parsedPayload);
+
+            var parityPacket = EncoderEngine.CreateParityFramePacket(3, 4, 12, payload);
+            var parsedParity = DecoderEngine.TryParseFramePacket(parityPacket, out var parityType, out var parityFrameIndex, out var parityTotalFrames, out var parityGroupStart, out var parityGroupCount, out var parityLength, out var parityPayload);
+
+            Assert.True(parsedParity);
+            Assert.Equal((byte)1, parityType);
+            Assert.Equal(0, parityFrameIndex);
+            Assert.Equal(12, parityTotalFrames);
+            Assert.Equal(3, parityGroupStart);
+            Assert.Equal(4, parityGroupCount);
+            Assert.Equal(payloadLength, parityLength);
+            Assert.Equal(payload, parityPayload);
+        }
 
         [Fact]
         public async Task EncoderDecoder_RoundTrip_FakeFFmpeg()

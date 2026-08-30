@@ -17,80 +17,31 @@ namespace YTAHD.Core.Core
         // magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen + sha256
         private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
 
-        private readonly IModulator _modulator;
-        private readonly YTAHD.Core.Infrastructure.IFFmpegWrapper _ffmpeg;
-
-        public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg)
+        private interface IFrameBitsDecoderStrategy
         {
-            _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
-            _ffmpeg = ffmpeg ?? throw new ArgumentNullException(nameof(ffmpeg));
+            void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet);
         }
 
-        public async Task VerifyAsync()
+        private sealed class BinaryGridFrameBitsDecoderStrategy : IFrameBitsDecoderStrategy
         {
-            if (!await _ffmpeg.IsAvailableAsync())
-                throw new InvalidOperationException("ffmpeg not found in PATH or not runnable");
-        }
-
-        public async Task DecodeAsync(string inputVideo, string outputFile)
-        {
-            if (!File.Exists(inputVideo))
-                throw new FileNotFoundException("Input video not found", inputVideo);
-
-            // Placeholder: spawn ffmpeg to extract raw frames and decode using _modulator
-            await Task.Run(() => File.WriteAllText(outputFile, "YTAHD-DECODE-PLACEHOLDER"));
-        }
-
-        /// <summary>
-        /// Decode a raw RGB24 stream produced by the encoder into the original payload bytes.
-        /// This helper is intended for tests that use a fake ffmpeg process which exposes raw RGB24 frames.
-        /// </summary>
-        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile)
-        {
-            if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
-            if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
-
-            int blocksX = width / macroblockSize;
-            int blocksY = height / macroblockSize;
-            int bitsPerFrame = blocksX * blocksY;
-            int headerBits = HeaderBytes * 8;
-            int payloadBitsPerFrame = bitsPerFrame - headerBits;
-            if (payloadBitsPerFrame < 8)
-                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
-            int payloadBytesPerFrame = payloadBitsPerFrame / 8;
-
-            int rowBytes = width * 3;
-            int frameBytes = rowBytes * height;
-
-            var orderedPayload = new SortedDictionary<int, byte[]>();
-            var parityPayloadByGroup = new Dictionary<int, byte[]>();
-            var groupCountByGroup = new Dictionary<int, int>();
-            int totalDataFrames = -1;
-
-            const int repeatedFrameCount = 3;
-            byte[] frameBuf = new byte[frameBytes];
-            byte[] lastFrame = Array.Empty<byte>();
-            bool hasLastFrame = false;
-            int lastRunLength = 0;
-
-            void DecodePayloadFrame(ReadOnlySpan<byte> frame)
+            public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet)
             {
-                int framePacketBytes = bitsPerFrame / 8;
-                var packet = new byte[framePacketBytes];
+                int blocksX = width / macroblockSize;
+                int blocksY = height / macroblockSize;
 
                 for (int by = 0; by < blocksY; by++)
                 {
                     for (int bx = 0; bx < blocksX; bx++)
                     {
                         int frameBitIndex = by * blocksX + bx;
-                        if (frameBitIndex >= framePacketBytes * 8)
+                        if (frameBitIndex >= packet.Length * 8)
                         {
                             continue;
                         }
 
                         int sampleX = bx * macroblockSize + macroblockSize / 2;
                         int sampleY = by * macroblockSize + macroblockSize / 2;
-                        int idx = sampleY * rowBytes + sampleX * 3; // R channel
+                        int idx = sampleY * rowBytes + sampleX * 3;
                         int bitValue = 0;
                         if (idx >= 0 && idx + 2 < frameBytes)
                         {
@@ -106,138 +57,151 @@ namespace YTAHD.Core.Core
                         }
                     }
                 }
-
-                if (packet.Length < HeaderBytes)
-                {
-                    return;
-                }
-
-                int magic = (packet[0] << 8) | packet[1];
-                byte version = packet[2];
-                byte frameType = packet[3];
-                if (magic != FrameMagic || version != FrameVersion)
-                {
-                    return;
-                }
-
-                int frameIndex = (packet[4] << 24) | (packet[5] << 16) | (packet[6] << 8) | packet[7];
-                int declaredTotalFrames = (packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11];
-                int groupStart = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
-                int groupCount = packet[16];
-                int payloadLength = (packet[17] << 8) | packet[18];
-                if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
-                {
-                    return;
-                }
-                if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0)
-                {
-                    return;
-                }
-
-                if (totalDataFrames < 0)
-                {
-                    totalDataFrames = declaredTotalFrames;
-                }
-
-                int availablePayload = Math.Max(0, packet.Length - HeaderBytes);
-                if (payloadLength > availablePayload)
-                {
-                    return;
-                }
-
-                var payload = new byte[payloadLength];
-                if (payloadLength > 0)
-                {
-                    Buffer.BlockCopy(packet, HeaderBytes, payload, 0, payloadLength);
-                }
-
-                // FEAT-015: validate per-frame SHA-256 before accepting payload.
-                var expectedHash = new ReadOnlySpan<byte>(packet, 19, 32);
-                var actualHash = SHA256.HashData(payload);
-                if (!actualHash.AsSpan().SequenceEqual(expectedHash))
-                {
-                    return;
-                }
-
-                if (frameType == FrameTypeData)
-                {
-                    orderedPayload[frameIndex] = payload;
-                    groupCountByGroup[groupStart] = groupCount;
-                }
-                else if (frameType == FrameTypeParity)
-                {
-                    parityPayloadByGroup[groupStart] = payload;
-                    groupCountByGroup[groupStart] = groupCount;
-                }
             }
+        }
 
-            void FlushRun()
+        private readonly IModulator _modulator;
+        private readonly YTAHD.Core.Infrastructure.IFFmpegWrapper _ffmpeg;
+
+        public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg)
+        {
+            _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
+            _ffmpeg = ffmpeg ?? throw new ArgumentNullException(nameof(ffmpeg));
+        }
+
+        public static int GetPayloadBytesPerFrame(int width, int height, int macroblockSize, int headerBytes)
+        {
+            if (width <= 0 || height <= 0)
+                throw new ArgumentOutOfRangeException(nameof(width));
+            if (macroblockSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(macroblockSize));
+            if (headerBytes < 0)
+                throw new ArgumentOutOfRangeException(nameof(headerBytes));
+
+            int blocksX = width / macroblockSize;
+            int blocksY = height / macroblockSize;
+            int bitsPerFrame = blocksX * blocksY;
+            int payloadBitsPerFrame = bitsPerFrame - (headerBytes * 8);
+            return payloadBitsPerFrame >= 8 ? payloadBitsPerFrame / 8 : 0;
+        }
+
+        public static bool TryParseFramePacket(byte[] packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
+        {
+            frameType = 0;
+            frameIndex = 0;
+            totalDataFrames = 0;
+            groupStart = 0;
+            groupCount = 0;
+            payloadLength = 0;
+            payload = Array.Empty<byte>();
+
+            if (packet == null || packet.Length < HeaderBytes)
+                return false;
+
+            int magic = (packet[0] << 8) | packet[1];
+            byte version = packet[2];
+            if (magic != FrameMagic || version != FrameVersion)
+                return false;
+
+            frameType = packet[3];
+            frameIndex = (packet[4] << 24) | (packet[5] << 16) | (packet[6] << 8) | packet[7];
+            totalDataFrames = (packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11];
+            groupStart = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
+            groupCount = packet[16];
+            payloadLength = (packet[17] << 8) | packet[18];
+
+            if (totalDataFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - HeaderBytes)
+                return false;
+
+            payload = new byte[payloadLength];
+            if (payloadLength > 0)
             {
-                if (!hasLastFrame || lastRunLength <= 0)
-                {
-                    return;
-                }
-
-                // Expand a run of duplicated frames back into payload-frame count.
-                // This preserves legitimate adjacent identical payload frames (e.g. 6 repeated frames => 2 payload frames).
-                int payloadCopies = Math.Max(1, (lastRunLength + (repeatedFrameCount / 2)) / repeatedFrameCount);
-                for (int i = 0; i < payloadCopies; i++)
-                {
-                    DecodePayloadFrame(lastFrame);
-                }
+                Buffer.BlockCopy(packet, HeaderBytes, payload, 0, payloadLength);
             }
 
-            while (true)
+            var expectedHash = new byte[32];
+            Buffer.BlockCopy(packet, 19, expectedHash, 0, expectedHash.Length);
+            var actualHash = SHA256.HashData(payload);
+            if (!actualHash.AsSpan().SequenceEqual(expectedHash))
             {
-                int read = 0;
-                while (read < frameBytes)
-                {
-                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
-                    if (r == 0) break;
-                    read += r;
-                }
-
-                if (read < frameBytes) break; // end
-
-                if (!hasLastFrame)
-                {
-                    lastFrame = new byte[frameBytes];
-                    Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
-                    hasLastFrame = true;
-                    lastRunLength = 1;
-                    continue;
-                }
-
-                if (frameBuf.AsSpan(0, frameBytes).SequenceEqual(lastFrame.AsSpan(0, frameBytes)))
-                {
-                    lastRunLength++;
-                    continue;
-                }
-
-                FlushRun();
-                Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
-                lastRunLength = 1;
-
-                int accumulated = 0;
-                foreach (var kv in orderedPayload)
-                {
-                    accumulated += kv.Value.Length;
-                    if (accumulated >= expectedOutputBytes)
-                    {
-                        break;
-                    }
-                }
-                if (accumulated >= expectedOutputBytes) break;
+                return false;
             }
 
-            FlushRun();
+            return true;
+        }
+
+        private static int GetDuplicateFrameCount(int lastRunLength, int repeatedFrameCount)
+        {
+            if (repeatedFrameCount <= 0)
+                throw new ArgumentOutOfRangeException(nameof(repeatedFrameCount));
+
+            return Math.Max(1, (lastRunLength + (repeatedFrameCount / 2)) / repeatedFrameCount);
+        }
+
+        private static void AddDecodedFrameToMaps(
+            ReadOnlySpan<byte> frame,
+            int width,
+            int height,
+            int macroblockSize,
+            int rowBytes,
+            int frameBytes,
+            int payloadBytesPerFrame,
+            SortedDictionary<int, byte[]> orderedPayload,
+            Dictionary<int, byte[]> parityPayloadByGroup,
+            Dictionary<int, int> groupCountByGroup,
+            ref int totalDataFrames,
+            int bitsPerFrame)
+        {
+            int framePacketBytes = bitsPerFrame / 8;
+            var packet = new byte[framePacketBytes];
+
+            IFrameBitsDecoderStrategy strategy = new BinaryGridFrameBitsDecoderStrategy();
+            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
+
+            if (packet.Length < HeaderBytes)
+            {
+                return;
+            }
+
+            if (!TryParseFramePacket(packet, out var frameType, out var frameIndex, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
+            {
+                return;
+            }
+
+            if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
+            {
+                return;
+            }
+            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0)
+            {
+                return;
+            }
 
             if (totalDataFrames < 0)
             {
-                throw new InvalidDataException("No valid frames were decoded.");
+                totalDataFrames = declaredTotalFrames;
             }
 
-            // FEAT-016: single-erasure recovery using XOR parity per frame group.
+            if (frameType == FrameTypeData)
+            {
+                orderedPayload[frameIndex] = payload;
+                groupCountByGroup[groupStart] = groupCount;
+            }
+            else if (frameType == FrameTypeParity)
+            {
+                parityPayloadByGroup[groupStart] = payload;
+                groupCountByGroup[groupStart] = groupCount;
+            }
+        }
+
+        private static void RecoverMissingPayloadFrames(
+            SortedDictionary<int, byte[]> orderedPayload,
+            Dictionary<int, byte[]> parityPayloadByGroup,
+            Dictionary<int, int> groupCountByGroup,
+            int totalDataFrames,
+            int payloadBytesPerFrame,
+            int expectedOutputBytes)
+        {
             foreach (var kv in parityPayloadByGroup)
             {
                 int groupStart = kv.Key;
@@ -305,11 +269,13 @@ namespace YTAHD.Core.Core
                 }
                 orderedPayload[missingIndex] = recoveredPayload;
             }
+        }
 
+        private static byte[] AssembleOutputBuffer(SortedDictionary<int, byte[]> orderedPayload, int totalDataFrames, int expectedOutputBytes)
+        {
             var outBuf = new byte[expectedOutputBytes];
             int written = 0;
-            int expectedFrameIndex = 0;
-            for (; expectedFrameIndex < totalDataFrames; expectedFrameIndex++)
+            for (int expectedFrameIndex = 0; expectedFrameIndex < totalDataFrames; expectedFrameIndex++)
             {
                 if (written >= expectedOutputBytes)
                 {
@@ -334,6 +300,140 @@ namespace YTAHD.Core.Core
                 throw new InvalidDataException("Decoded payload is incomplete. Frames may be missing or invalid.");
             }
 
+            return outBuf;
+        }
+
+        public async Task VerifyAsync()
+        {
+            if (!await _ffmpeg.IsAvailableAsync())
+                throw new InvalidOperationException("ffmpeg not found in PATH or not runnable");
+        }
+
+        public async Task DecodeAsync(string inputVideo, string outputFile)
+        {
+            if (!File.Exists(inputVideo))
+                throw new FileNotFoundException("Input video not found", inputVideo);
+
+            // Placeholder: spawn ffmpeg to extract raw frames and decode using _modulator
+            await Task.Run(() => File.WriteAllText(outputFile, "YTAHD-DECODE-PLACEHOLDER"));
+        }
+
+        /// <summary>
+        /// Decode a raw RGB24 stream produced by the encoder into the original payload bytes.
+        /// This helper is intended for tests that use a fake ffmpeg process which exposes raw RGB24 frames.
+        /// </summary>
+        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile)
+        {
+            if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
+            if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
+
+            int payloadBytesPerFrame = GetPayloadBytesPerFrame(width, height, macroblockSize, HeaderBytes);
+            if (payloadBytesPerFrame <= 0)
+                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
+
+            int rowBytes = width * 3;
+            int frameBytes = rowBytes * height;
+            int blocksX = width / macroblockSize;
+            int blocksY = height / macroblockSize;
+            int bitsPerFrame = blocksX * blocksY;
+
+            var orderedPayload = new SortedDictionary<int, byte[]>();
+            var parityPayloadByGroup = new Dictionary<int, byte[]>();
+            var groupCountByGroup = new Dictionary<int, int>();
+            int totalDataFrames = -1;
+
+            const int repeatedFrameCount = 3;
+            byte[] frameBuf = new byte[frameBytes];
+            byte[] lastFrame = Array.Empty<byte>();
+            bool hasLastFrame = false;
+            int lastRunLength = 0;
+
+            void DecodePayloadFrame(ReadOnlySpan<byte> frame)
+            {
+                AddDecodedFrameToMaps(
+                    frame,
+                    width,
+                    height,
+                    macroblockSize,
+                    rowBytes,
+                    frameBytes,
+                    payloadBytesPerFrame,
+                    orderedPayload,
+                    parityPayloadByGroup,
+                    groupCountByGroup,
+                    ref totalDataFrames,
+                    bitsPerFrame);
+            }
+
+            void FlushRun()
+            {
+                if (!hasLastFrame || lastRunLength <= 0)
+                {
+                    return;
+                }
+
+                // Expand a run of duplicated frames back into payload-frame count.
+                // This preserves legitimate adjacent identical payload frames (e.g. 6 repeated frames => 2 payload frames).
+                int payloadCopies = GetDuplicateFrameCount(lastRunLength, repeatedFrameCount);
+                for (int i = 0; i < payloadCopies; i++)
+                {
+                    DecodePayloadFrame(lastFrame);
+                }
+            }
+
+            while (true)
+            {
+                int read = 0;
+                while (read < frameBytes)
+                {
+                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
+                    if (r == 0) break;
+                    read += r;
+                }
+
+                if (read < frameBytes) break; // end
+
+                if (!hasLastFrame)
+                {
+                    lastFrame = new byte[frameBytes];
+                    Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
+                    hasLastFrame = true;
+                    lastRunLength = 1;
+                    continue;
+                }
+
+                if (frameBuf.AsSpan(0, frameBytes).SequenceEqual(lastFrame.AsSpan(0, frameBytes)))
+                {
+                    lastRunLength++;
+                    continue;
+                }
+
+                FlushRun();
+                Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
+                lastRunLength = 1;
+
+                int accumulated = 0;
+                foreach (var kv in orderedPayload)
+                {
+                    accumulated += kv.Value.Length;
+                    if (accumulated >= expectedOutputBytes)
+                    {
+                        break;
+                    }
+                }
+                if (accumulated >= expectedOutputBytes) break;
+            }
+
+            FlushRun();
+
+            if (totalDataFrames < 0)
+            {
+                throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
+            }
+
+            RecoverMissingPayloadFrames(orderedPayload, parityPayloadByGroup, groupCountByGroup, totalDataFrames, payloadBytesPerFrame, expectedOutputBytes);
+
+            var outBuf = AssembleOutputBuffer(orderedPayload, totalDataFrames, expectedOutputBytes);
             await File.WriteAllBytesAsync(outputFile, outBuf);
         }
     }
