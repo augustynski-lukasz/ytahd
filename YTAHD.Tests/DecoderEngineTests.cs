@@ -55,6 +55,74 @@ namespace YTAHD.Tests
             Assert.Equal(payload, parsedPayload);
         }
 
+        [Fact]
+        public void FrameBitDecoderFactory_Uses_BinaryGrid_Strategy_For_Phase1()
+        {
+            var decoder = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
+
+            var frame = new byte[128 * 64 * 3];
+            for (int i = 0; i < frame.Length; i += 3)
+            {
+                frame[i] = 255;
+                frame[i + 1] = 255;
+                frame[i + 2] = 255;
+            }
+
+            var packet = new byte[(128 * 64) / 8];
+            decoder.Decode(frame, 128, 64, 1, 128 * 3, frame.Length, packet);
+
+            Assert.NotEmpty(packet);
+            Assert.All(packet, b => Assert.Equal((byte)0xFF, b));
+        }
+
+        [Fact]
+        public void FramePacket_TryParse_Rejects_Invalid_Magic_And_Length_Values()
+        {
+            var packet = new byte[HeaderBytes + 4];
+            packet[0] = 0x00;
+            packet[1] = 0x00;
+            packet[2] = 1;
+            packet[3] = 0;
+            packet[4] = 0;
+            packet[5] = 0;
+            packet[6] = 0;
+            packet[7] = 0;
+            packet[8] = 0;
+            packet[9] = 0;
+            packet[10] = 0;
+            packet[11] = 1;
+            packet[12] = 0;
+            packet[13] = 0;
+            packet[14] = 0;
+            packet[15] = 0;
+            packet[16] = 0;
+            packet[17] = 0;
+            packet[18] = 8;
+
+            var result = FramePacket.TryParse(packet, out _, out _, out _, out _, out _, out _, out _);
+            Assert.False(result);
+
+            var invalidFrameType = new byte[HeaderBytes];
+            invalidFrameType[0] = 0x59;
+            invalidFrameType[1] = 0x54;
+            invalidFrameType[2] = 1;
+            invalidFrameType[3] = 2;
+            invalidFrameType[8] = 0;
+            invalidFrameType[9] = 0;
+            invalidFrameType[10] = 0;
+            invalidFrameType[11] = 1;
+            invalidFrameType[12] = 0;
+            invalidFrameType[13] = 0;
+            invalidFrameType[14] = 0;
+            invalidFrameType[15] = 0;
+            invalidFrameType[16] = 1;
+            invalidFrameType[17] = 0;
+            invalidFrameType[18] = 0;
+
+            var invalidFrameTypeResult = FramePacket.TryParse(invalidFrameType, out _, out _, out _, out _, out _, out _, out _);
+            Assert.False(invalidFrameTypeResult);
+        }
+
         [Theory]
         [InlineData(0)]
         [InlineData(1)]

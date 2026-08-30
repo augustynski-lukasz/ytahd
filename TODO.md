@@ -221,6 +221,21 @@ BUG-003 — Finalize the real FFmpeg-based Phase 1 pipeline for lossy encode/dec
 - Status: completed
 - Done: 2026-08-30 (updated the CLI/FFmpeg wiring, service options, and regression tests so the real encode/decode flow uses the correct FFmpeg path, timeout behavior, and lossy decoder semantics)
 
+REFACTOR-001 — Extract the frame-packet parser/validator into a dedicated helper and cover edge cases with tests
+
+- Status: completed
+- Done: 2026-08-30 (FramePacket parser/validator extracted and edge-case coverage is in place)
+
+REFACTOR-002 — Split algorithm-specific bit decoding from the frame accumulator and parity logic
+
+- Status: completed
+- Done: 2026-08-30 (FrameBitDecoderFactory isolates the modulator-specific decode strategy and enables independent algorithm tests)
+
+REFACTOR-003 — Extract a decode pipeline orchestrator for stream reading, frame grouping, parity recovery, and output assembly
+
+- Status: completed
+- Done: 2026-08-30 (duplicate-run and payload handling are centralized so the stream loop remains a small coordinator with shared recovery logic)
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

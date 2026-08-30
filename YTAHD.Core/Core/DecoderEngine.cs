@@ -11,58 +11,9 @@ namespace YTAHD.Core.Core
 {
     public class DecoderEngine
     {
-        private const int FrameMagic = 0x5954; // 'YT'
-        private const byte FrameVersion = 1;
-        private const byte FrameTypeData = 0;
-        private const byte FrameTypeParity = 1;
-        // magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen + sha256
-        private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
-
-        private interface IFrameBitsDecoderStrategy
-        {
-            void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet);
-        }
-
-        private sealed class BinaryGridFrameBitsDecoderStrategy : IFrameBitsDecoderStrategy
-        {
-            public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet)
-            {
-                int blocksX = width / macroblockSize;
-                int blocksY = height / macroblockSize;
-
-                for (int by = 0; by < blocksY; by++)
-                {
-                    for (int bx = 0; bx < blocksX; bx++)
-                    {
-                        int frameBitIndex = by * blocksX + bx;
-                        if (frameBitIndex >= packet.Length * 8)
-                        {
-                            continue;
-                        }
-
-                        int sampleX = bx * macroblockSize + macroblockSize / 2;
-                        int sampleY = by * macroblockSize + macroblockSize / 2;
-                        int idx = sampleY * rowBytes + sampleX * 3;
-                        int bitValue = 0;
-                        if (idx >= 0 && idx + 2 < frameBytes)
-                        {
-                            byte r = frame[idx];
-                            byte g = frame[idx + 1];
-                            byte b = frame[idx + 2];
-                            int luminance = (r + g + b) / 3;
-                            bitValue = luminance > 127 ? 1 : 0;
-                        }
-
-                        if (bitValue == 1)
-                        {
-                            int byteIdx = frameBitIndex / 8;
-                            int bitInByte = 7 - (frameBitIndex % 8);
-                            packet[byteIdx] |= (byte)(1 << bitInByte);
-                        }
-                    }
-                }
-            }
-        }
+        private const int HeaderBytes = FramePacket.HeaderBytes;
+        private const byte FrameTypeData = FramePacket.FrameTypeData;
+        private const byte FrameTypeParity = FramePacket.FrameTypeParity;
 
         private readonly IModulator _modulator;
         private readonly YTAHD.Core.Infrastructure.IFFmpegWrapper _ffmpeg;
@@ -99,42 +50,7 @@ namespace YTAHD.Core.Core
 
         public static bool TryParseFramePacket(byte[] packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
         {
-            frameType = 0;
-            frameIndex = 0;
-            totalDataFrames = 0;
-            groupStart = 0;
-            groupCount = 0;
-            payloadLength = 0;
-            payload = Array.Empty<byte>();
-
-            if (packet == null || packet.Length < HeaderBytes)
-                return false;
-
-            int magic = (packet[0] << 8) | packet[1];
-            byte version = packet[2];
-            if (magic != FrameMagic || version != FrameVersion)
-                return false;
-
-            frameType = packet[3];
-            frameIndex = (packet[4] << 24) | (packet[5] << 16) | (packet[6] << 8) | packet[7];
-            totalDataFrames = (packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11];
-            groupStart = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
-            groupCount = packet[16];
-            payloadLength = (packet[17] << 8) | packet[18];
-
-            if (totalDataFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - HeaderBytes)
-                return false;
-
-            payload = new byte[payloadLength];
-            if (payloadLength > 0)
-            {
-                Buffer.BlockCopy(packet, HeaderBytes, payload, 0, payloadLength);
-            }
-
-            // Phase 1 intentionally uses lossy video encoding, so packet-level SHA-256 validation is
-            // not a reliable ground truth for decode success. The exact payload may be altered by the
-            // video codec while still preserving enough structure to recover the data.
-            return true;
+            return FramePacket.TryParse(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
         }
 
         private static int GetDuplicateFrameCount(int lastRunLength, int repeatedFrameCount)
@@ -143,6 +59,199 @@ namespace YTAHD.Core.Core
                 throw new ArgumentOutOfRangeException(nameof(repeatedFrameCount));
 
             return Math.Max(1, (lastRunLength + (repeatedFrameCount / 2)) / repeatedFrameCount);
+        }
+
+        private static void FlushDuplicateRun(
+            byte[] lastFrame,
+            ref bool hasLastFrame,
+            ref int lastRunLength,
+            int repeatedFrameCount,
+            Func<byte[], bool> decodePayloadFrame)
+        {
+            if (!hasLastFrame || lastRunLength <= 0)
+            {
+                return;
+            }
+
+            int payloadCopies = GetDuplicateFrameCount(lastRunLength, repeatedFrameCount);
+            for (int i = 0; i < payloadCopies; i++)
+            {
+                decodePayloadFrame(lastFrame);
+            }
+        }
+
+        private sealed class DecodedFrameAccumulator
+        {
+            private readonly SortedDictionary<int, byte[]> _orderedPayload = new();
+            private readonly Dictionary<int, byte[]> _parityPayloadByGroup = new();
+            private readonly Dictionary<int, int> _groupCountByGroup = new();
+
+            public SortedDictionary<int, byte[]> OrderedPayload => _orderedPayload;
+            public Dictionary<int, byte[]> ParityPayloadByGroup => _parityPayloadByGroup;
+            public Dictionary<int, int> GroupCountByGroup => _groupCountByGroup;
+            public int TotalDataFrames { get; private set; } = -1;
+            public bool SawInvalidPacket { get; private set; }
+
+            public bool TryAddDecodedFrame(
+                ReadOnlySpan<byte> frame,
+                int width,
+                int height,
+                int macroblockSize,
+                int rowBytes,
+                int frameBytes,
+                int payloadBytesPerFrame,
+                int bitsPerFrame)
+            {
+                int framePacketBytes = bitsPerFrame / 8;
+                var packet = new byte[framePacketBytes];
+
+                var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
+                strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
+
+                if (packet.Length < HeaderBytes)
+                {
+                    SawInvalidPacket = true;
+                    return false;
+                }
+
+                if (!TryParseFramePacket(packet, out var frameType, out var frameIndex, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
+                {
+                    SawInvalidPacket = true;
+                    return false;
+                }
+
+                if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
+                {
+                    SawInvalidPacket = true;
+                    return false;
+                }
+                if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0)
+                {
+                    SawInvalidPacket = true;
+                    return false;
+                }
+
+                if (TotalDataFrames < 0)
+                {
+                    TotalDataFrames = declaredTotalFrames;
+                }
+
+                if (frameType == FrameTypeData)
+                {
+                    _orderedPayload[frameIndex] = payload;
+                    _groupCountByGroup[groupStart] = groupCount;
+                }
+                else if (frameType == FrameTypeParity)
+                {
+                    _parityPayloadByGroup[groupStart] = payload;
+                    _groupCountByGroup[groupStart] = groupCount;
+                }
+
+                return true;
+            }
+
+            public void RecoverMissingPayloadFrames(int totalDataFrames, int payloadBytesPerFrame, int expectedOutputBytes)
+            {
+                foreach (var kv in _parityPayloadByGroup)
+                {
+                    int groupStart = kv.Key;
+                    int groupCount = _groupCountByGroup.TryGetValue(groupStart, out var c) ? c : 0;
+                    if (groupCount <= 0)
+                    {
+                        continue;
+                    }
+
+                    int missingIndex = -1;
+                    int missingCount = 0;
+                    for (int i = 0; i < groupCount; i++)
+                    {
+                        int idx = groupStart + i;
+                        if (idx >= totalDataFrames)
+                        {
+                            break;
+                        }
+
+                        if (!_orderedPayload.ContainsKey(idx))
+                        {
+                            missingIndex = idx;
+                            missingCount++;
+                        }
+                    }
+
+                    if (missingCount > 1)
+                    {
+                        throw new InvalidDataException($"Parity group starting at frame {groupStart} has {missingCount} missing data frames; cannot recover more than one loss per group.");
+                    }
+
+                    if (missingCount != 1)
+                    {
+                        continue;
+                    }
+
+                    var recovered = new byte[payloadBytesPerFrame];
+                    var parity = kv.Value;
+                    Buffer.BlockCopy(parity, 0, recovered, 0, Math.Min(parity.Length, recovered.Length));
+
+                    for (int i = 0; i < groupCount; i++)
+                    {
+                        int idx = groupStart + i;
+                        if (idx == missingIndex) continue;
+                        if (!_orderedPayload.TryGetValue(idx, out var existingPayload)) continue;
+
+                        for (int b = 0; b < recovered.Length; b++)
+                        {
+                            byte v = b < existingPayload.Length ? existingPayload[b] : (byte)0;
+                            recovered[b] ^= v;
+                        }
+                    }
+
+                    int recoveredLen = payloadBytesPerFrame;
+                    if (missingIndex == totalDataFrames - 1)
+                    {
+                        int remainder = expectedOutputBytes - (payloadBytesPerFrame * (totalDataFrames - 1));
+                        recoveredLen = Math.Max(0, Math.Min(payloadBytesPerFrame, remainder));
+                    }
+
+                    var recoveredPayload = new byte[recoveredLen];
+                    if (recoveredLen > 0)
+                    {
+                        Buffer.BlockCopy(recovered, 0, recoveredPayload, 0, recoveredLen);
+                    }
+                    _orderedPayload[missingIndex] = recoveredPayload;
+                }
+            }
+
+            public byte[] AssembleOutput(int expectedOutputBytes)
+            {
+                var outBuf = new byte[expectedOutputBytes];
+                int written = 0;
+                for (int expectedFrameIndex = 0; expectedFrameIndex < TotalDataFrames; expectedFrameIndex++)
+                {
+                    if (written >= expectedOutputBytes)
+                    {
+                        break;
+                    }
+
+                    if (!_orderedPayload.TryGetValue(expectedFrameIndex, out var payload))
+                    {
+                        throw new InvalidDataException($"Missing frame index {expectedFrameIndex}. Frame may be lost or failed hash verification.");
+                    }
+
+                    int toCopy = Math.Min(payload.Length, expectedOutputBytes - written);
+                    if (toCopy > 0)
+                    {
+                        Buffer.BlockCopy(payload, 0, outBuf, written, toCopy);
+                        written += toCopy;
+                    }
+                }
+
+                if (written < expectedOutputBytes)
+                {
+                    throw new InvalidDataException("Decoded payload is incomplete. Frames may be missing or invalid.");
+                }
+
+                return outBuf;
+            }
         }
 
         private static bool TryReadDecodedPacket(
@@ -158,7 +267,7 @@ namespace YTAHD.Core.Core
             int framePacketBytes = bitsPerFrame / 8;
             packet = new byte[framePacketBytes];
 
-            IFrameBitsDecoderStrategy strategy = new BinaryGridFrameBitsDecoderStrategy();
+            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
 
             if (packet.Length < HeaderBytes)
@@ -167,173 +276,6 @@ namespace YTAHD.Core.Core
             }
 
             return TryParseFramePacket(packet, out _, out _, out _, out _, out _, out _, out _);
-        }
-
-        private static bool AddDecodedFrameToMaps(
-            ReadOnlySpan<byte> frame,
-            int width,
-            int height,
-            int macroblockSize,
-            int rowBytes,
-            int frameBytes,
-            int payloadBytesPerFrame,
-            SortedDictionary<int, byte[]> orderedPayload,
-            Dictionary<int, byte[]> parityPayloadByGroup,
-            Dictionary<int, int> groupCountByGroup,
-            ref int totalDataFrames,
-            int bitsPerFrame)
-        {
-            int framePacketBytes = bitsPerFrame / 8;
-            var packet = new byte[framePacketBytes];
-
-            IFrameBitsDecoderStrategy strategy = new BinaryGridFrameBitsDecoderStrategy();
-            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
-
-            if (packet.Length < HeaderBytes)
-            {
-                return false;
-            }
-
-            if (!TryParseFramePacket(packet, out var frameType, out var frameIndex, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
-            {
-                return false;
-            }
-
-            if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
-            {
-                return false;
-            }
-            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0)
-            {
-                return false;
-            }
-
-            if (totalDataFrames < 0)
-            {
-                totalDataFrames = declaredTotalFrames;
-            }
-
-            if (frameType == FrameTypeData)
-            {
-                orderedPayload[frameIndex] = payload;
-                groupCountByGroup[groupStart] = groupCount;
-            }
-            else if (frameType == FrameTypeParity)
-            {
-                parityPayloadByGroup[groupStart] = payload;
-                groupCountByGroup[groupStart] = groupCount;
-            }
-
-            return true;
-        }
-
-        private static void RecoverMissingPayloadFrames(
-            SortedDictionary<int, byte[]> orderedPayload,
-            Dictionary<int, byte[]> parityPayloadByGroup,
-            Dictionary<int, int> groupCountByGroup,
-            int totalDataFrames,
-            int payloadBytesPerFrame,
-            int expectedOutputBytes)
-        {
-            foreach (var kv in parityPayloadByGroup)
-            {
-                int groupStart = kv.Key;
-                int groupCount = groupCountByGroup.TryGetValue(groupStart, out var c) ? c : 0;
-                if (groupCount <= 0)
-                {
-                    continue;
-                }
-
-                int missingIndex = -1;
-                int missingCount = 0;
-                for (int i = 0; i < groupCount; i++)
-                {
-                    int idx = groupStart + i;
-                    if (idx >= totalDataFrames)
-                    {
-                        break;
-                    }
-
-                    if (!orderedPayload.ContainsKey(idx))
-                    {
-                        missingIndex = idx;
-                        missingCount++;
-                    }
-                }
-
-                if (missingCount > 1)
-                {
-                    throw new InvalidDataException($"Parity group starting at frame {groupStart} has {missingCount} missing data frames; cannot recover more than one loss per group.");
-                }
-
-                if (missingCount != 1)
-                {
-                    continue;
-                }
-
-                var recovered = new byte[payloadBytesPerFrame];
-                var parity = kv.Value;
-                Buffer.BlockCopy(parity, 0, recovered, 0, Math.Min(parity.Length, recovered.Length));
-
-                for (int i = 0; i < groupCount; i++)
-                {
-                    int idx = groupStart + i;
-                    if (idx == missingIndex) continue;
-                    if (!orderedPayload.TryGetValue(idx, out var existingPayload)) continue;
-
-                    for (int b = 0; b < recovered.Length; b++)
-                    {
-                        byte v = b < existingPayload.Length ? existingPayload[b] : (byte)0;
-                        recovered[b] ^= v;
-                    }
-                }
-
-                int recoveredLen = payloadBytesPerFrame;
-                if (missingIndex == totalDataFrames - 1)
-                {
-                    int remainder = expectedOutputBytes - (payloadBytesPerFrame * (totalDataFrames - 1));
-                    recoveredLen = Math.Max(0, Math.Min(payloadBytesPerFrame, remainder));
-                }
-
-                var recoveredPayload = new byte[recoveredLen];
-                if (recoveredLen > 0)
-                {
-                    Buffer.BlockCopy(recovered, 0, recoveredPayload, 0, recoveredLen);
-                }
-                orderedPayload[missingIndex] = recoveredPayload;
-            }
-        }
-
-        private static byte[] AssembleOutputBuffer(SortedDictionary<int, byte[]> orderedPayload, int totalDataFrames, int expectedOutputBytes)
-        {
-            var outBuf = new byte[expectedOutputBytes];
-            int written = 0;
-            for (int expectedFrameIndex = 0; expectedFrameIndex < totalDataFrames; expectedFrameIndex++)
-            {
-                if (written >= expectedOutputBytes)
-                {
-                    break;
-                }
-
-                if (!orderedPayload.TryGetValue(expectedFrameIndex, out var payload))
-                {
-                    throw new InvalidDataException($"Missing frame index {expectedFrameIndex}. Frame may be lost or failed hash verification.");
-                }
-
-                int toCopy = Math.Min(payload.Length, expectedOutputBytes - written);
-                if (toCopy > 0)
-                {
-                    Buffer.BlockCopy(payload, 0, outBuf, written, toCopy);
-                    written += toCopy;
-                }
-            }
-
-            if (written < expectedOutputBytes)
-            {
-                throw new InvalidDataException("Decoded payload is incomplete. Frames may be missing or invalid.");
-            }
-
-            return outBuf;
         }
 
         public async Task VerifyAsync()
@@ -472,63 +414,25 @@ namespace YTAHD.Core.Core
             int blocksY = height / macroblockSize;
             int bitsPerFrame = blocksX * blocksY;
 
-            var orderedPayload = new SortedDictionary<int, byte[]>();
-            var parityPayloadByGroup = new Dictionary<int, byte[]>();
-            var groupCountByGroup = new Dictionary<int, int>();
-            int totalDataFrames = -1;
-
+            var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
             byte[] frameBuf = new byte[frameBytes];
             byte[] lastFrame = Array.Empty<byte>();
             byte[] lastLogicalSignature = Array.Empty<byte>();
             bool hasLastFrame = false;
             int lastRunLength = 0;
-            bool sawInvalidPacket = false;
 
             byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
             {
                 var packet = new byte[bitsPerFrame / 8];
-                IFrameBitsDecoderStrategy strategy = new BinaryGridFrameBitsDecoderStrategy();
+                var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
                 strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
                 return packet;
             }
 
             bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
             {
-                var accepted = AddDecodedFrameToMaps(
-                    frame,
-                    width,
-                    height,
-                    macroblockSize,
-                    rowBytes,
-                    frameBytes,
-                    payloadBytesPerFrame,
-                    orderedPayload,
-                    parityPayloadByGroup,
-                    groupCountByGroup,
-                    ref totalDataFrames,
-                    bitsPerFrame);
-
-                if (!accepted)
-                {
-                    sawInvalidPacket = true;
-                }
-
-                return accepted;
-            }
-
-            void FlushRun()
-            {
-                if (!hasLastFrame || lastRunLength <= 0)
-                {
-                    return;
-                }
-
-                int payloadCopies = GetDuplicateFrameCount(lastRunLength, repeatedFrameCount);
-                for (int i = 0; i < payloadCopies; i++)
-                {
-                    DecodePayloadFrame(lastFrame);
-                }
+                return accumulator.TryAddDecodedFrame(frame, width, height, macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame);
             }
 
             while (true)
@@ -547,10 +451,7 @@ namespace YTAHD.Core.Core
                 {
                     throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
                 }
-                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out _))
-                {
-                    throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
-                }
+
                 var currentLogicalSignature = CreateLogicalSignature(frameBuf);
 
                 if (!hasLastFrame)
@@ -569,8 +470,8 @@ namespace YTAHD.Core.Core
                     continue;
                 }
 
-                FlushRun();
-                if (sawInvalidPacket)
+                FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
+                if (accumulator.SawInvalidPacket)
                 {
                     throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
                 }
@@ -582,7 +483,7 @@ namespace YTAHD.Core.Core
                 if (expectedOutputBytes > 0)
                 {
                     int accumulated = 0;
-                    foreach (var kv in orderedPayload)
+                    foreach (var kv in accumulator.OrderedPayload)
                     {
                         accumulated += kv.Value.Length;
                         if (accumulated >= expectedOutputBytes)
@@ -598,21 +499,20 @@ namespace YTAHD.Core.Core
                 }
             }
 
-            FlushRun();
+            FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
-            if (sawInvalidPacket)
+            if (accumulator.SawInvalidPacket)
             {
                 throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
             }
 
-            if (totalDataFrames < 0)
+            if (accumulator.TotalDataFrames < 0)
             {
                 throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
             }
 
-            RecoverMissingPayloadFrames(orderedPayload, parityPayloadByGroup, groupCountByGroup, totalDataFrames, payloadBytesPerFrame, expectedOutputBytes);
-
-            var outBuf = AssembleOutputBuffer(orderedPayload, totalDataFrames, expectedOutputBytes);
+            accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, expectedOutputBytes);
+            var outBuf = accumulator.AssembleOutput(expectedOutputBytes);
             await File.WriteAllBytesAsync(outputFile, outBuf);
         }
 
@@ -631,63 +531,25 @@ namespace YTAHD.Core.Core
             int blocksY = height / macroblockSize;
             int bitsPerFrame = blocksX * blocksY;
 
-            var orderedPayload = new SortedDictionary<int, byte[]>();
-            var parityPayloadByGroup = new Dictionary<int, byte[]>();
-            var groupCountByGroup = new Dictionary<int, int>();
-            int totalDataFrames = -1;
-
+            var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
             byte[] frameBuf = new byte[frameBytes];
             byte[] lastFrame = Array.Empty<byte>();
             byte[] lastLogicalSignature = Array.Empty<byte>();
             bool hasLastFrame = false;
             int lastRunLength = 0;
-            bool sawInvalidPacket = false;
 
             byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
             {
                 var packet = new byte[bitsPerFrame / 8];
-                IFrameBitsDecoderStrategy strategy = new BinaryGridFrameBitsDecoderStrategy();
+                var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
                 strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
                 return packet;
             }
 
             bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
             {
-                var accepted = AddDecodedFrameToMaps(
-                    frame,
-                    width,
-                    height,
-                    macroblockSize,
-                    rowBytes,
-                    frameBytes,
-                    payloadBytesPerFrame,
-                    orderedPayload,
-                    parityPayloadByGroup,
-                    groupCountByGroup,
-                    ref totalDataFrames,
-                    bitsPerFrame);
-
-                if (!accepted)
-                {
-                    sawInvalidPacket = true;
-                }
-
-                return accepted;
-            }
-
-            void FlushRun()
-            {
-                if (!hasLastFrame || lastRunLength <= 0)
-                {
-                    return;
-                }
-
-                int payloadCopies = GetDuplicateFrameCount(lastRunLength, repeatedFrameCount);
-                for (int i = 0; i < payloadCopies; i++)
-                {
-                    DecodePayloadFrame(lastFrame);
-                }
+                return accumulator.TryAddDecodedFrame(frame, width, height, macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame);
             }
 
             while (true)
@@ -725,8 +587,8 @@ namespace YTAHD.Core.Core
                     continue;
                 }
 
-                FlushRun();
-                if (sawInvalidPacket)
+                FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
+                if (accumulator.SawInvalidPacket)
                 {
                     throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
                 }
@@ -736,26 +598,26 @@ namespace YTAHD.Core.Core
                 lastRunLength = 1;
             }
 
-            FlushRun();
+            FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
-            if (sawInvalidPacket)
+            if (accumulator.SawInvalidPacket)
             {
                 throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
             }
 
-            if (totalDataFrames < 0)
+            if (accumulator.TotalDataFrames < 0)
             {
                 throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
             }
 
             int expectedLength = 0;
-            foreach (var payload in orderedPayload.Values)
+            foreach (var payload in accumulator.OrderedPayload.Values)
             {
                 expectedLength += payload.Length;
             }
 
-            RecoverMissingPayloadFrames(orderedPayload, parityPayloadByGroup, groupCountByGroup, totalDataFrames, payloadBytesPerFrame, expectedLength);
-            var outBuf = AssembleOutputBuffer(orderedPayload, totalDataFrames, expectedLength);
+            accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, expectedLength);
+            var outBuf = accumulator.AssembleOutput(expectedLength);
             await File.WriteAllBytesAsync(outputFile, outBuf);
         }
     }
