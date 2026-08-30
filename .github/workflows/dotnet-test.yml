@@ -26,8 +26,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg and native runtime deps
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libfontconfig1 libfreetype6
 
       - name: Restore
         run: dotnet restore
