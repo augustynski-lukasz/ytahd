@@ -206,6 +206,11 @@ FEAT-033 — Add a protocol-level validation test matrix that checks encoder/dec
 - Status: completed
 - Done: 2026-08-30
 
+CHORE-008 — Ignore generated temporary test files and artifacts
+
+- Status: completed
+- Done: 2026-08-30
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

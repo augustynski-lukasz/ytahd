@@ -33,6 +33,17 @@ TestResults/
 
 # Temporary
 *.tmp
+*.temp
+*.bak
+*.orig
+
+# Temporary test artifacts
+*.test.*
+test-output/
+tmp/
+temp/
+*_tmp*
+*_temp*
 
 # Coverage
 coverage.*
