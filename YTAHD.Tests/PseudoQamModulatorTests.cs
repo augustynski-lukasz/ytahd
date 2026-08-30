@@ -1,4 +1,5 @@
 using Xunit;
+using YTAHD.Core.Core;
 using YTAHD.Core.Modulation;
 
 namespace YTAHD.Tests
@@ -31,6 +32,19 @@ namespace YTAHD.Tests
             mod.Decode(pixelBuffer, output);
 
             Assert.Equal(input, output);
+        }
+
+        [Fact]
+        public void Phase2_FrameDecoder_Recovers_The_Original_Bytes_From_The_Quantized_Block()
+        {
+            var input = new byte[] { 0x00, 0x01, 0x2A, 0x3C, 0x5A, 0x7F, 0xA5, 0xFF };
+            var frame = PseudoQamModulator.CreatePhase2Frame(64, 64, 8, input);
+            var packet = new byte[input.Length];
+            var decoder = FrameBitDecoderFactory.CreateForModulator(new PseudoQamModulator());
+
+            decoder.Decode(frame, 64, 64, 16, 64 * 3, 64 * 64 * 4, packet, 8);
+
+            Assert.Equal(input, packet);
         }
     }
 }

@@ -97,13 +97,16 @@ namespace YTAHD.Core.Core
             int rowBytes,
             int frameBytes,
             int bitsPerFrame,
+            IModulator modulator,
             out byte[] packet)
         {
-            int framePacketBytes = bitsPerFrame / 8;
+            int payloadBytesPerFrame = modulator.GetPayloadBytesPerFrame(width, height, HeaderBytes, 0, macroblockSize);
+            int framePacketBytes = modulator is PseudoQamModulator ? Math.Max(bitsPerFrame, HeaderBytes) : HeaderBytes + payloadBytesPerFrame;
             packet = new byte[framePacketBytes];
 
-            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator(macroblockSize, macroblockSize));
-            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
+            int borderWidth = modulator is PseudoQamModulator ? 32 : 0;
+            var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
+            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 
             if (packet.Length < HeaderBytes)
             {
@@ -236,7 +239,7 @@ namespace YTAHD.Core.Core
         /// </summary>
         public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile)
         {
-            var orchestrator = new DecodeStreamOrchestrator(width, height, macroblockSize);
+            var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize);
             var output = await orchestrator.ProcessAsync(rgbStream, expectedOutputBytes);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
@@ -244,7 +247,7 @@ namespace YTAHD.Core.Core
 
         public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, string outputFile)
         {
-            var orchestrator = new DecodeStreamOrchestrator(width, height, macroblockSize);
+            var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize);
             var output = await orchestrator.ProcessAsync(rgbStream, 0);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);

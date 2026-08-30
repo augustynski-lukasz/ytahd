@@ -8,12 +8,19 @@ namespace YTAHD.Core.Core
 {
     public sealed class DecodeStreamOrchestrator
     {
+        private readonly IModulator _modulator;
         private readonly int _width;
         private readonly int _height;
         private readonly int _macroblockSize;
 
         public DecodeStreamOrchestrator(int width, int height, int macroblockSize)
+            : this(new BinaryGridModulator(macroblockSize, macroblockSize), width, height, macroblockSize)
         {
+        }
+
+        public DecodeStreamOrchestrator(IModulator modulator, int width, int height, int macroblockSize)
+        {
+            _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
             _width = width;
             _height = height;
             _macroblockSize = macroblockSize;
@@ -26,7 +33,7 @@ namespace YTAHD.Core.Core
             if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
 
-            int payloadBytesPerFrame = DecoderEngine.GetPayloadBytesPerFrame(_width, _height, _macroblockSize, FramePacket.HeaderBytes);
+            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(_width, _height, FramePacket.HeaderBytes, 0, _macroblockSize);
             if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
 
@@ -35,6 +42,7 @@ namespace YTAHD.Core.Core
             int blocksX = _width / _macroblockSize;
             int blocksY = _height / _macroblockSize;
             int bitsPerFrame = blocksX * blocksY;
+            int packetByteLength = _modulator is PseudoQamModulator ? Math.Max(bitsPerFrame, FramePacket.HeaderBytes) : FramePacket.HeaderBytes + payloadBytesPerFrame;
 
             var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
@@ -44,15 +52,16 @@ namespace YTAHD.Core.Core
 
             byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
             {
-                var packet = new byte[bitsPerFrame / 8];
-                var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
-                strategy.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet);
+                var packet = new byte[packetByteLength];
+                var strategy = FrameBitDecoderFactory.CreateForModulator(_modulator);
+                int borderWidth = _modulator is PseudoQamModulator ? 32 : 0;
+                strategy.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
                 return packet;
             }
 
             bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
             {
-                return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame);
+                return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, packetByteLength, _modulator);
             }
 
             while (true)
@@ -69,7 +78,7 @@ namespace YTAHD.Core.Core
 
                 metrics.TotalFramesSeen++;
 
-                if (!DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, out var packet))
+                if (!DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
                 {
                     metrics.InvalidPacketCount++;
                     continue;

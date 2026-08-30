@@ -130,6 +130,57 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task RealFfmpeg_RoundTrip_EncodeDecode_Succeeds_For_PseudoQam()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the real smoke test.");
+
+            var inputFile = Path.GetTempFileName();
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+
+            try
+            {
+                var payload = new byte[512];
+                new Random(77).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var service = new YtahdCodecService(new PseudoQamModulator(), new DefaultFFmpegWrapperFactory(ffmpegPath));
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                await service.DecodeAsync(new DecodeOptions
+                {
+                    InputVideo = outputVideo,
+                    OutputFile = outputFile,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
+            }
+        }
+
+        [Fact]
         public async Task EncodeAsync_WritesData_UsingServiceApi()
         {
             var tmpIn = Path.GetTempFileName();

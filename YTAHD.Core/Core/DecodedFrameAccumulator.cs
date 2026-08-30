@@ -26,13 +26,15 @@ namespace YTAHD.Core.Core
             int rowBytes,
             int frameBytes,
             int payloadBytesPerFrame,
-            int bitsPerFrame)
+            int bitsPerFrame,
+            IModulator modulator)
         {
-            int framePacketBytes = bitsPerFrame / 8;
+            int framePacketBytes = modulator is PseudoQamModulator ? Math.Max(bitsPerFrame, FramePacket.HeaderBytes) : FramePacket.HeaderBytes + payloadBytesPerFrame;
             var packet = new byte[framePacketBytes];
 
-            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator(macroblockSize, macroblockSize));
-            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
+            int borderWidth = modulator is PseudoQamModulator ? 32 : 0;
+            var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
+            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 
             if (packet.Length < FramePacket.HeaderBytes)
             {
@@ -74,6 +76,19 @@ namespace YTAHD.Core.Core
             }
 
             return true;
+        }
+
+        public bool TryAddDecodedFrame(
+            ReadOnlySpan<byte> frame,
+            int width,
+            int height,
+            int macroblockSize,
+            int rowBytes,
+            int frameBytes,
+            int payloadBytesPerFrame,
+            int bitsPerFrame)
+        {
+            return TryAddDecodedFrame(frame, width, height, macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, new BinaryGridModulator(macroblockSize, macroblockSize));
         }
 
         public void RecoverMissingPayloadFrames(int totalDataFrames, int payloadBytesPerFrame, int expectedOutputBytes)

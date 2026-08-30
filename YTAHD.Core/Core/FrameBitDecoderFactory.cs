@@ -5,7 +5,7 @@ namespace YTAHD.Core.Core
 {
     public interface IFrameBitDecoder
     {
-        void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet);
+        void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0);
     }
 
     public static class FrameBitDecoderFactory
@@ -38,10 +38,98 @@ namespace YTAHD.Core.Core
 
     public sealed class BinaryGridFrameBitDecoder : IFrameBitDecoder
     {
-        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet)
+        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
         {
-            int blocksX = width / macroblockSize;
-            int blocksY = height / macroblockSize;
+            packet.Clear();
+
+            bool isRgba = frame.Length == width * height * 4;
+            int bytesPerPixel = isRgba ? 4 : 3;
+            int effectiveRowBytes = isRgba ? width * 4 : rowBytes;
+            int blocksX = Math.Max(1, width / macroblockSize);
+            int blocksY = Math.Max(1, height / macroblockSize);
+
+            var blockLuminance = new int[blocksX * blocksY];
+            int index = 0;
+            for (int by = 0; by < blocksY; by++)
+            {
+                for (int bx = 0; bx < blocksX; bx++)
+                {
+                    int sampleXStart = bx * macroblockSize;
+                    int sampleYStart = by * macroblockSize;
+                    int sampleCount = 0;
+                    long luminanceTotal = 0;
+
+                    for (int sy = 0; sy < macroblockSize; sy++)
+                    {
+                        for (int sx = 0; sx < macroblockSize; sx++)
+                        {
+                            int pixelX = sampleXStart + sx;
+                            int pixelY = sampleYStart + sy;
+                            if (pixelX >= width || pixelY >= height)
+                            {
+                                continue;
+                            }
+
+                            int idx = (pixelY * effectiveRowBytes) + (pixelX * bytesPerPixel);
+                            if (idx + 2 >= frameBytes)
+                            {
+                                continue;
+                            }
+
+                            byte r = frame[idx];
+                            byte g = frame[idx + 1];
+                            byte b = frame[idx + 2];
+                            luminanceTotal += (r + g + b) / 3;
+                            sampleCount++;
+                        }
+                    }
+
+                    blockLuminance[index++] = sampleCount > 0 ? (int)(luminanceTotal / sampleCount) : 0;
+                }
+            }
+
+            int[] thresholds = BuildThresholdCandidates(blockLuminance);
+            var bestCandidate = new byte[packet.Length];
+            int bestScore = int.MinValue;
+            int bestThreshold = 128;
+
+            foreach (int threshold in thresholds)
+            {
+                var candidate = new byte[packet.Length];
+                for (int by = 0; by < blocksY; by++)
+                {
+                    for (int bx = 0; bx < blocksX; bx++)
+                    {
+                        int frameBitIndex = by * blocksX + bx;
+                        if (frameBitIndex >= candidate.Length * 8)
+                        {
+                            continue;
+                        }
+
+                        int luminance = blockLuminance[by * blocksX + bx];
+                        if (luminance >= threshold)
+                        {
+                            int byteIdx = frameBitIndex / 8;
+                            int bitInByte = 7 - (frameBitIndex % 8);
+                            candidate[byteIdx] |= (byte)(1 << bitInByte);
+                        }
+                    }
+                }
+
+                int score = ScoreCandidate(candidate);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestThreshold = threshold;
+                    candidate.AsSpan().CopyTo(bestCandidate);
+                }
+            }
+
+            if (bestScore > int.MinValue)
+            {
+                bestCandidate.CopyTo(packet);
+                return;
+            }
 
             for (int by = 0; by < blocksY; by++)
             {
@@ -53,20 +141,8 @@ namespace YTAHD.Core.Core
                         continue;
                     }
 
-                    int sampleX = bx * macroblockSize + macroblockSize / 2;
-                    int sampleY = by * macroblockSize + macroblockSize / 2;
-                    int idx = sampleY * rowBytes + sampleX * 3;
-                    int bitValue = 0;
-                    if (idx >= 0 && idx + 2 < frameBytes)
-                    {
-                        byte r = frame[idx];
-                        byte g = frame[idx + 1];
-                        byte b = frame[idx + 2];
-                        int luminance = (r + g + b) / 3;
-                        bitValue = luminance > 127 ? 1 : 0;
-                    }
-
-                    if (bitValue == 1)
+                    int luminance = blockLuminance[by * blocksX + bx];
+                    if (luminance >= bestThreshold)
                     {
                         int byteIdx = frameBitIndex / 8;
                         int bitInByte = 7 - (frameBitIndex % 8);
@@ -75,48 +151,124 @@ namespace YTAHD.Core.Core
                 }
             }
         }
+
+        private static int ScoreCandidate(ReadOnlySpan<byte> candidate)
+        {
+            int score = PacketQualityScorer.Score(candidate);
+
+            if (candidate.Length >= FramePacket.HeaderBytes)
+            {
+                if (candidate[0] == 0x59 && candidate[1] == 0x54)
+                {
+                    score += 4096;
+                }
+
+                if (candidate[2] == FramePacket.FrameVersion)
+                {
+                    score += 256;
+                }
+
+                if (candidate[3] == FramePacket.FrameTypeData || candidate[3] == FramePacket.FrameTypeParity)
+                {
+                    score += 128;
+                }
+
+                int payloadLength = (candidate[17] << 8) | candidate[18];
+                if (payloadLength >= 0 && payloadLength <= candidate.Length - FramePacket.HeaderBytes)
+                {
+                    score += 128;
+                }
+            }
+
+            return score;
+        }
+
+        private static int[] BuildThresholdCandidates(int[] blockLuminance)
+        {
+            if (blockLuminance.Length == 0)
+            {
+                return new[] { 128 };
+            }
+
+            var sorted = (int[])blockLuminance.Clone();
+            Array.Sort(sorted);
+
+            int median = sorted[sorted.Length / 2];
+            int average = 0;
+            foreach (int value in sorted)
+            {
+                average += value;
+            }
+            average /= Math.Max(1, sorted.Length);
+
+            var values = new SortedSet<int>
+            {
+                0, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 255
+            };
+
+            foreach (int value in new[] { median, average, Math.Min(96, median), Math.Max(160, median), sorted[0], sorted[^1] })
+            {
+                values.Add(value);
+            }
+
+            return values.ToArray();
+        }
     }
 
     public sealed class PseudoQamFrameBitDecoder : IFrameBitDecoder
     {
-        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet)
+        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
         {
-            int blocksX = width / macroblockSize;
-            int blocksY = height / macroblockSize;
+            packet.Clear();
+
+            int blocksX = Math.Max(1, (width - (borderWidth * 2)) / macroblockSize);
+            int blocksY = Math.Max(1, (height - (borderWidth * 2)) / macroblockSize);
+            bool isRgba = frame.Length == width * height * 4;
+
             for (int by = 0; by < blocksY; by++)
             {
                 for (int bx = 0; bx < blocksX; bx++)
                 {
-                    int bitIndex = by * blocksX + bx;
-                    if (bitIndex >= packet.Length * 8)
+                    int byteIndex = by * blocksX + bx;
+                    if (byteIndex >= packet.Length)
                     {
                         continue;
                     }
 
-                    int sampleX = bx * macroblockSize + macroblockSize / 2;
-                    int sampleY = by * macroblockSize + macroblockSize / 2;
-                    int idx = sampleY * rowBytes + sampleX * 3;
-                    if (idx + 2 >= frameBytes)
+                    int sampleX = borderWidth + (bx * macroblockSize) + (macroblockSize / 2);
+                    int sampleY = borderWidth + (by * macroblockSize) + (macroblockSize / 2);
+                    int pixelIndex = sampleY * width + sampleX;
+                    int channelOffset = isRgba ? pixelIndex * 4 : pixelIndex * 3;
+
+                    if (channelOffset + 2 >= frame.Length)
                     {
                         continue;
                     }
 
-                    int luminance = (frame[idx] + frame[idx + 1] + frame[idx + 2]) / 3;
-                    int bit = luminance > 127 ? 1 : 0;
-                    if (bit == 1)
-                    {
-                        int byteIdx = bitIndex / 8;
-                        int bitInByte = 7 - (bitIndex % 8);
-                        packet[byteIdx] |= (byte)(1 << bitInByte);
-                    }
+                    byte r = frame[channelOffset + 0];
+                    byte g = frame[channelOffset + 1];
+
+                    int lowNibble = DequantizeNibble(r);
+                    int highNibble = DequantizeNibble(g);
+                    packet[byteIndex] = (byte)((highNibble << 4) | lowNibble);
                 }
             }
+        }
+
+        private static int DequantizeNibble(byte pamValue)
+        {
+            const int pamStep = 17;
+            int half = pamStep / 2;
+            int level = (pamValue + half) / pamStep;
+            if (level < 0) level = 0;
+            if (level > 15) level = 15;
+            return level;
         }
     }
 
     public sealed class DctFrameBitDecoder : IFrameBitDecoder
     {
-        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet)
+        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
         {
             packet.Clear();
         }

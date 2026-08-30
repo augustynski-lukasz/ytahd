@@ -25,9 +25,9 @@ namespace YTAHD.Core.Modulation
             int usableHeight = Math.Max(0, height - (borderWidth * 2));
             int blocksX = Math.Max(1, usableWidth / blockWidth);
             int blocksY = Math.Max(1, usableHeight / blockHeight);
-            int bitsPerFrame = blocksX * blocksY * 12;
-            int payloadBitsPerFrame = bitsPerFrame - (headerBytes * 8);
-            return Math.Max(0, payloadBitsPerFrame / 8);
+            int payloadBytesPerFrame = blocksX * blocksY;
+            int capacityAfterHeader = payloadBytesPerFrame - headerBytes;
+            return Math.Max(0, capacityAfterHeader);
         }
 
         private const int PamLevels = 16;
