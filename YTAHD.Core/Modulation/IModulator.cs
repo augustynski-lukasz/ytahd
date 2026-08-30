@@ -3,7 +3,10 @@ using System;
 namespace YTAHD.Core.Modulation
 {
     /// <summary>
-    /// Abstract modulator contract. Implementations operate on spans for high-performance in-memory work.
+    /// Visual mapping contract for a modulation algorithm.
+    /// Implementations describe how payload bits are laid out in pixels and how a frame is rendered.
+    /// Packet framing, validation, duplicate-run selection, and recovery remain the responsibility of
+    /// the decoder pipeline and the packet codec layer rather than the modulator itself.
     /// Note: Span<T> cannot cross async/await boundaries, so long-running operations should use synchronous span-based APIs
     /// and expose async wrappers if needed.
     /// </summary>

@@ -51,7 +51,7 @@ namespace YTAHD.Core.Core
 
         public static bool TryParseFramePacket(byte[] packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
         {
-            return FramePacket.TryParse(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
+            return FramePacketCodec.TryDecode(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
         }
 
         public static int GetPacketQualityScore(ReadOnlySpan<byte> packet)
@@ -110,7 +110,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            return PacketQualityScorer.IsFramePacketValid(packet);
+            return FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out _, out _) && PacketQualityScorer.IsFramePacketValid(packet);
         }
 
         public async Task VerifyAsync()

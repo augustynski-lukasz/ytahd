@@ -314,8 +314,9 @@ REFACTOR-005 — Extract packet quality scoring and validity checks into a dedic
 
 REFACTOR-006 — Extract frame packet serialization into a dedicated codec class
 
-- Status: not-started
-- Notes: Move header formatting, parsing, and validation away from the decoder/encoder into a `FramePacketCodec` abstraction that owns the protocol contract for frame metadata, hash checks, and payload length rules.
+- Status: completed
+- Done: 2026-08-30
+- Notes: `FramePacketCodec` owns the packet metadata format, payload encoding/decoding, and validation path; the parser now delegates through the codec and the runtime contract is covered by dedicated tests.
 - Acceptance criteria:
   - The packet header format is defined in one place.
   - Encoder and decoder both use the same codec for metadata writes and reads.
@@ -323,12 +324,40 @@ REFACTOR-006 — Extract frame packet serialization into a dedicated codec class
 
 REFACTOR-007 — Limit `IModulator` to visual mapping and make decoder/encoder responsibilities explicit
 
-- Status: not-started
-- Notes: The modulator should describe how bits are laid out in pixels, not how transport packets are parsed, recovered, or validated. Separate visual encoding from data framing and stream recovery.
+- Status: completed
+- Done: 2026-08-30
+- Notes: the modulator interface now documents the visual-only boundary, and the runtime framer/recovery logic is separated into `FramePacketCodec`, duplicate-run tracking, and accumulator-based recovery.
 - Acceptance criteria:
   - `IModulator` contains only block layout and symbol mapping behavior.
   - Transport, parity, and duplicate-run logic live in the decoder pipeline or a packet codec.
   - New modulation algorithms can be swapped without changing the stream/recovery pipeline contract.
+
+REFACTOR-008 — Extract the decode stream loop into a dedicated pipeline orchestrator
+
+- Status: not-started
+- Notes: Move the RGB stream reading loop, per-frame validation, duplicate-run handling, and final assembly decisions out of `DecoderEngine` into a dedicated orchestrator that coordinates the packet codec, duplicate tracker, and accumulator.
+- Acceptance criteria:
+  - `DecoderEngine` becomes a thin coordinator with no direct stream-loop recovery details.
+  - Duplicate-run selection and flush behavior are ordered explicitly in one place.
+  - Real H.264 smoke tests continue to pass unchanged.
+
+REFACTOR-009 — Separate recovery policy from payload assembly and duplicate selection
+
+- Status: not-started
+- Notes: Consolidate the decision rules for parity recovery, duplicate-run choice, and output assembly into a single recovery policy object so the packet codec and accumulator remain deterministic and testable.
+- Acceptance criteria:
+  - Recovery decisions are made by a dedicated policy or strategy abstraction.
+  - The accumulator only stores/assembles valid frame data.
+  - Direct unit tests cover parity loss, duplicate drift, and final output ordering.
+
+FEAT-041 — Add a codec-and-stream regression set focused on the decode orchestration boundary
+
+- Status: not-started
+- Notes: Extend the unit coverage to test the stream loop as a contract boundary, including duplicate-run flush behavior, parity recovery edge cases, and invalid-frame handling before output assembly.
+- Acceptance criteria:
+  - There is direct coverage for stream-loop edge cases without opaque end-to-end dependencies.
+  - Thresholds for invalid packet ratios and recovered groups remain measurable.
+  - The H.264 smoke path remains the final production validation gate.
 
 Notes:
 

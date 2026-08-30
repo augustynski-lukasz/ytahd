@@ -48,50 +48,12 @@ namespace YTAHD.Core.Core
 
         public static byte[] CreateDataFramePacket(int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength, ReadOnlySpan<byte> payload, int payloadCapacity = 0)
         {
-            int capacity = payloadCapacity > 0 ? payloadCapacity : payload.Length;
-            byte[] framePacket = new byte[HeaderBytes + capacity];
-            WriteFrameHeader(framePacket, FrameTypeData, frameIndex, totalDataFrames, groupStart, groupCount, payloadLength);
-
-            var hash = SHA256.HashData(payload.Slice(0, Math.Min(payloadLength, payload.Length)));
-            Buffer.BlockCopy(hash, 0, framePacket, 19, hash.Length);
-            Buffer.BlockCopy(payload.ToArray(), 0, framePacket, HeaderBytes, Math.Min(capacity, payload.Length));
-
-            return framePacket;
+            return FramePacketCodec.CreateDataFramePacket(frameIndex, totalDataFrames, groupStart, groupCount, payloadLength, payload, payloadCapacity);
         }
 
         public static byte[] CreateParityFramePacket(int groupStart, int groupCount, int totalDataFrames, ReadOnlySpan<byte> parityPayload)
         {
-            byte[] parityPacket = new byte[HeaderBytes + parityPayload.Length];
-            WriteFrameHeader(parityPacket, FrameTypeParity, 0, totalDataFrames, groupStart, groupCount, parityPayload.Length);
-
-            var parityHash = SHA256.HashData(parityPayload);
-            Buffer.BlockCopy(parityHash, 0, parityPacket, 19, parityHash.Length);
-            parityPayload.CopyTo(parityPacket.AsSpan(HeaderBytes, parityPacket.Length - HeaderBytes));
-
-            return parityPacket;
-        }
-
-        private static void WriteFrameHeader(byte[] framePacket, byte frameType, int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength)
-        {
-            framePacket[0] = (byte)((FrameMagic >> 8) & 0xFF);
-            framePacket[1] = (byte)(FrameMagic & 0xFF);
-            framePacket[2] = FrameVersion;
-            framePacket[3] = frameType;
-            framePacket[4] = (byte)((frameIndex >> 24) & 0xFF);
-            framePacket[5] = (byte)((frameIndex >> 16) & 0xFF);
-            framePacket[6] = (byte)((frameIndex >> 8) & 0xFF);
-            framePacket[7] = (byte)(frameIndex & 0xFF);
-            framePacket[8] = (byte)((totalDataFrames >> 24) & 0xFF);
-            framePacket[9] = (byte)((totalDataFrames >> 16) & 0xFF);
-            framePacket[10] = (byte)((totalDataFrames >> 8) & 0xFF);
-            framePacket[11] = (byte)(totalDataFrames & 0xFF);
-            framePacket[12] = (byte)((groupStart >> 24) & 0xFF);
-            framePacket[13] = (byte)((groupStart >> 16) & 0xFF);
-            framePacket[14] = (byte)((groupStart >> 8) & 0xFF);
-            framePacket[15] = (byte)(groupStart & 0xFF);
-            framePacket[16] = (byte)groupCount;
-            framePacket[17] = (byte)((payloadLength >> 8) & 0xFF);
-            framePacket[18] = (byte)(payloadLength & 0xFF);
+            return FramePacketCodec.CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
         }
 
         public static byte[] ConvertRgbaToRgb(ReadOnlySpan<byte> rgbaFrame, int width, int height)

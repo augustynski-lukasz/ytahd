@@ -11,7 +11,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            if (!FramePacket.TryParse(packet.ToArray(), out var frameType, out _, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out _))
+            if (!FramePacketCodec.TryDecode(packet, out var frameType, out _, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out _))
             {
                 return false;
             }
@@ -31,7 +31,7 @@ namespace YTAHD.Core.Core
                 return 0;
             }
 
-            if (!FramePacket.TryParse(packet.ToArray(), out var frameType, out _, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
+            if (!FramePacketCodec.TryDecode(packet, out var frameType, out _, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
             {
                 return 0;
             }
