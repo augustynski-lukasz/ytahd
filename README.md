@@ -46,6 +46,10 @@ dotnet run --project YTAHD.Cli -- decode input.mp4 output.bin --ffmpeg-path "D:\
 
 The Phase 1 baseline currently targets the real H.264 path (`libx264`), which is the practical codec pair used by the smoke-validation workflow. This is now treated as the stable production contract for future modulation work until a new baseline is explicitly approved.
 
+### Current implementation status
+
+The real FFmpeg pipeline is working and the lossy decoder has been hardened to tolerate H.264 drift, duplicate frame runs, and empty/weak payloads without silently accepting corrupted output. The packet protocol and quality-scoring logic have been centralized into dedicated helpers, and the remaining backlog is focused on extractive refactors at the decode orchestration boundary (`REFACTOR-008`, `REFACTOR-009`, and `FEAT-041`).
+
 A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
 
 ---
