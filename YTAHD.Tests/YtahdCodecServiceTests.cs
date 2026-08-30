@@ -181,6 +181,148 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task RealCli_RoundTrip_EncodeDecode_Succeeds_For_PseudoQam()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the CLI smoke test.");
+
+            var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+            var cliProject = Path.Combine(repoRoot, "YTAHD.Cli", "YTAHD.Cli.csproj");
+            Assert.True(File.Exists(cliProject), $"CLI project not found at '{cliProject}'.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[256];
+                new Random(1234).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                using var encodeProcess = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"run --project \"{cliProject}\" -- encode \"{inputFile}\" \"{outputVideo}\" --modulator phase2 --ffmpeg-path \"{ffmpegPath}\" --width 640 --height 480 --fps 30",
+                        WorkingDirectory = repoRoot,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                encodeProcess.Start();
+                var encodeStdOut = await encodeProcess.StandardOutput.ReadToEndAsync();
+                var encodeStdErr = await encodeProcess.StandardError.ReadToEndAsync();
+                await encodeProcess.WaitForExitAsync();
+
+                Assert.True(encodeProcess.ExitCode == 0, $"Phase 2 CLI encode failed. StdOut: {encodeStdOut} StdErr: {encodeStdErr}");
+
+                using var decodeProcess = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"run --project \"{cliProject}\" -- decode \"{outputVideo}\" \"{outputFile}\" --modulator phase2 --ffmpeg-path \"{ffmpegPath}\"",
+                        WorkingDirectory = repoRoot,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                decodeProcess.Start();
+                var decodeStdOut = await decodeProcess.StandardOutput.ReadToEndAsync();
+                var decodeStdErr = await decodeProcess.StandardError.ReadToEndAsync();
+                await decodeProcess.WaitForExitAsync();
+
+                Assert.True(decodeProcess.ExitCode == 0, $"Phase 2 CLI decode failed. StdOut: {decodeStdOut} StdErr: {decodeStdErr}");
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
+            }
+        }
+
+        [Fact]
+        public async Task RealCli_RoundTrip_EncodeDecode_Succeeds_For_Phase1()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present for the Phase 1 CLI guardrail.");
+
+            var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+            var cliProject = Path.Combine(repoRoot, "YTAHD.Cli", "YTAHD.Cli.csproj");
+            Assert.True(File.Exists(cliProject), $"CLI project not found at '{cliProject}'.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[1024];
+                new Random(4321).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                using var encodeProcess = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"run --project \"{cliProject}\" -- encode \"{inputFile}\" \"{outputVideo}\" --modulator phase1 --ffmpeg-path \"{ffmpegPath}\" --width 640 --height 480 --fps 30",
+                        WorkingDirectory = repoRoot,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                encodeProcess.Start();
+                var encodeStdOut = await encodeProcess.StandardOutput.ReadToEndAsync();
+                var encodeStdErr = await encodeProcess.StandardError.ReadToEndAsync();
+                await encodeProcess.WaitForExitAsync();
+
+                Assert.True(encodeProcess.ExitCode == 0, $"Phase 1 CLI encode failed. StdOut: {encodeStdOut} StdErr: {encodeStdErr}");
+
+                using var decodeProcess = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"run --project \"{cliProject}\" -- decode \"{outputVideo}\" \"{outputFile}\" --modulator phase1 --ffmpeg-path \"{ffmpegPath}\"",
+                        WorkingDirectory = repoRoot,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                decodeProcess.Start();
+                var decodeStdOut = await decodeProcess.StandardOutput.ReadToEndAsync();
+                var decodeStdErr = await decodeProcess.StandardError.ReadToEndAsync();
+                await decodeProcess.WaitForExitAsync();
+
+                Assert.True(decodeProcess.ExitCode == 0, $"Phase 1 CLI decode failed. StdOut: {decodeStdOut} StdErr: {decodeStdErr}");
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
+            }
+        }
+
+        [Fact]
         public async Task EncodeAsync_WritesData_UsingServiceApi()
         {
             var tmpIn = Path.GetTempFileName();
