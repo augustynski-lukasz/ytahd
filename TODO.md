@@ -166,6 +166,26 @@ FEAT-025 — Wire Phase 3 modulation into CLI, tests, and perf analysis
 - Status: completed
 - Done: 2026-08-30 (CLI supports `phase3`, Phase 3 tests and encoder integration are passing, and perf model recognizes the mode)
 
+FEAT-026 — Add a modulator-aware payload-capacity contract and route `EncoderEngine` through it
+
+- Status: completed
+- Done: 2026-08-30
+
+FEAT-027 — Extract frame-rendering strategy from `EncoderEngine` so each modulator owns its output path
+
+- Status: completed
+- Done: 2026-08-30
+
+FEAT-028 — Split packet assembly and frame-header construction into dedicated helpers
+
+- Status: completed
+- Done: 2026-08-30
+
+FEAT-029 — Centralize RGB/RGBA conversion and buffer handling for encoder path consistency
+
+- Status: completed
+- Done: 2026-08-30
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

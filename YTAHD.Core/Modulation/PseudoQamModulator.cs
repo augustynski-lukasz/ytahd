@@ -13,6 +13,23 @@ namespace YTAHD.Core.Modulation
         public int MacroblockWidth => 16;
         public int MacroblockHeight => 16;
 
+        public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+        {
+            if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
+            if (headerBytes < 0) throw new ArgumentOutOfRangeException(nameof(headerBytes));
+            if (borderWidth < 0) throw new ArgumentOutOfRangeException(nameof(borderWidth));
+
+            int blockWidth = macroblockSize > 0 ? macroblockSize : MacroblockWidth;
+            int blockHeight = macroblockSize > 0 ? macroblockSize : MacroblockHeight;
+            int usableWidth = Math.Max(0, width - (borderWidth * 2));
+            int usableHeight = Math.Max(0, height - (borderWidth * 2));
+            int blocksX = Math.Max(1, usableWidth / blockWidth);
+            int blocksY = Math.Max(1, usableHeight / blockHeight);
+            int bitsPerFrame = blocksX * blocksY * 12;
+            int payloadBitsPerFrame = bitsPerFrame - (headerBytes * 8);
+            return Math.Max(0, payloadBitsPerFrame / 8);
+        }
+
         private const int PamLevels = 16;
         private const int PamStep = 17; // 256 / 15, then quantized to 16-level grid with exact 0..255 values
 
@@ -73,6 +90,11 @@ namespace YTAHD.Core.Modulation
                     rgbaBuffer[idx + 3] = 255;
                 }
             }
+        }
+
+        public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+        {
+            return CreatePhase2Frame(width, height, borderWidth, payload);
         }
 
         public static byte[] CreatePhase2Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)

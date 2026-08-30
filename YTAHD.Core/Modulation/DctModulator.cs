@@ -15,6 +15,25 @@ namespace YTAHD.Core.Modulation
         public int MacroblockWidth => BasisSize;
         public int MacroblockHeight => BasisSize;
 
+        public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+        {
+            if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
+            if (headerBytes < 0) throw new ArgumentOutOfRangeException(nameof(headerBytes));
+            if (borderWidth < 0) throw new ArgumentOutOfRangeException(nameof(borderWidth));
+
+            int usableWidth = Math.Max(0, width - (borderWidth * 2));
+            int usableHeight = Math.Max(0, height - (borderWidth * 2));
+            int dctBlocksX = Math.Max(1, usableWidth / BasisSize);
+            int dctBlocksY = Math.Max(1, usableHeight / BasisSize);
+            int payloadBytesPerFrame = dctBlocksX * dctBlocksY * Cutoff * Cutoff;
+            if (headerBytes > 0)
+            {
+                payloadBytesPerFrame = Math.Max(0, payloadBytesPerFrame - headerBytes);
+            }
+
+            return payloadBytesPerFrame;
+        }
+
         public void Encode(ReadOnlySpan<byte> input, Span<byte> pixelBuffer)
         {
             if (pixelBuffer.Length < BasisSize * BasisSize)
@@ -51,6 +70,11 @@ namespace YTAHD.Core.Modulation
                     pixelBuffer[y * BasisSize + x] = 128;
                 }
             }
+        }
+
+        public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+        {
+            return CreatePhase3Frame(width, height, borderWidth, payload);
         }
 
         public static byte[] CreatePhase3Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)

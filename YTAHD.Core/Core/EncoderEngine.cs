@@ -36,6 +36,77 @@ namespace YTAHD.Core.Core
             _fps = fps;
         }
 
+        public static byte[] CreateDataFramePacket(int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength, ReadOnlySpan<byte> payload, int payloadCapacity = 0)
+        {
+            int capacity = payloadCapacity > 0 ? payloadCapacity : payload.Length;
+            byte[] framePacket = new byte[HeaderBytes + capacity];
+            WriteFrameHeader(framePacket, FrameTypeData, frameIndex, totalDataFrames, groupStart, groupCount, payloadLength);
+
+            var hash = SHA256.HashData(payload.Slice(0, Math.Min(payloadLength, payload.Length)));
+            Buffer.BlockCopy(hash, 0, framePacket, 19, hash.Length);
+            Buffer.BlockCopy(payload.ToArray(), 0, framePacket, HeaderBytes, Math.Min(capacity, payload.Length));
+
+            return framePacket;
+        }
+
+        public static byte[] CreateParityFramePacket(int groupStart, int groupCount, int totalDataFrames, ReadOnlySpan<byte> parityPayload)
+        {
+            byte[] parityPacket = new byte[HeaderBytes + parityPayload.Length];
+            WriteFrameHeader(parityPacket, FrameTypeParity, 0, totalDataFrames, groupStart, groupCount, parityPayload.Length);
+
+            var parityHash = SHA256.HashData(parityPayload);
+            Buffer.BlockCopy(parityHash, 0, parityPacket, 19, parityHash.Length);
+            parityPayload.CopyTo(parityPacket.AsSpan(HeaderBytes, parityPacket.Length - HeaderBytes));
+
+            return parityPacket;
+        }
+
+        private static void WriteFrameHeader(byte[] framePacket, byte frameType, int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength)
+        {
+            framePacket[0] = (byte)((FrameMagic >> 8) & 0xFF);
+            framePacket[1] = (byte)(FrameMagic & 0xFF);
+            framePacket[2] = FrameVersion;
+            framePacket[3] = frameType;
+            framePacket[4] = (byte)((frameIndex >> 24) & 0xFF);
+            framePacket[5] = (byte)((frameIndex >> 16) & 0xFF);
+            framePacket[6] = (byte)((frameIndex >> 8) & 0xFF);
+            framePacket[7] = (byte)(frameIndex & 0xFF);
+            framePacket[8] = (byte)((totalDataFrames >> 24) & 0xFF);
+            framePacket[9] = (byte)((totalDataFrames >> 16) & 0xFF);
+            framePacket[10] = (byte)((totalDataFrames >> 8) & 0xFF);
+            framePacket[11] = (byte)(totalDataFrames & 0xFF);
+            framePacket[12] = (byte)((groupStart >> 24) & 0xFF);
+            framePacket[13] = (byte)((groupStart >> 16) & 0xFF);
+            framePacket[14] = (byte)((groupStart >> 8) & 0xFF);
+            framePacket[15] = (byte)(groupStart & 0xFF);
+            framePacket[16] = (byte)groupCount;
+            framePacket[17] = (byte)((payloadLength >> 8) & 0xFF);
+            framePacket[18] = (byte)(payloadLength & 0xFF);
+        }
+
+        public static byte[] ConvertRgbaToRgb(ReadOnlySpan<byte> rgbaFrame, int width, int height)
+        {
+            if (width <= 0 || height <= 0)
+                throw new ArgumentOutOfRangeException(nameof(width));
+
+            int pixelCount = width * height;
+            var rgbFrame = new byte[pixelCount * 3];
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int srcIndex = (y * width + x) * 4;
+                    int dstIndex = (y * width + x) * 3;
+                    rgbFrame[dstIndex] = rgbaFrame[srcIndex];
+                    rgbFrame[dstIndex + 1] = rgbaFrame[srcIndex + 1];
+                    rgbFrame[dstIndex + 2] = rgbaFrame[srcIndex + 2];
+                }
+            }
+
+            return rgbFrame;
+        }
+
         public async Task VerifyAsync()
         {
             if (!await _ffmpeg.IsAvailableAsync())
@@ -49,16 +120,13 @@ namespace YTAHD.Core.Core
 
             var data = await File.ReadAllBytesAsync(inputFile);
 
-            int blocksX = _width / _macroblockSize;
-            int blocksY = _height / _macroblockSize;
-            int bitsPerFrame = blocksX * blocksY; // Phase 1: 1 bit per macroblock
-
-            int headerBits = HeaderBytes * 8;
-            int payloadBitsPerFrame = bitsPerFrame - headerBits;
-            if (payloadBitsPerFrame < 8)
+            int borderWidth = _modulator is BinaryGridModulator ? 0 : 32;
+            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(_width, _height, HeaderBytes, borderWidth, _macroblockSize);
+            if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
 
-            int payloadBytesPerFrame = payloadBitsPerFrame / 8;
+            int blocksX = _width / _macroblockSize;
+            int blocksY = _height / _macroblockSize;
             int totalDataFrames = (data.Length + payloadBytesPerFrame - 1) / payloadBytesPerFrame;
 
             using var ff = await _ffmpeg.StartAsync(outputVideo);
@@ -72,114 +140,13 @@ namespace YTAHD.Core.Core
 
             async Task WriteFramePacketAsync(byte[] framePacket)
             {
-                byte[] rgbFrame = null;
+                byte[] rgbaFrame = _modulator.CreateFrame(_width, _height, borderWidth, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
+                byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
 
-                if (_modulator is PseudoQamModulator)
+                for (int rep = 0; rep < 3; rep++)
                 {
-                    var rgbaFrame = PseudoQamModulator.CreatePhase2Frame(_width, _height, borderWidth: 32, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
-                    rgbFrame = new byte[_width * _height * 3];
-                    for (int y = 0; y < _height; y++)
-                    {
-                        for (int x = 0; x < _width; x++)
-                        {
-                            int srcIndex = (y * _width + x) * 4;
-                            int dstIndex = (y * _width + x) * 3;
-                            rgbFrame[dstIndex] = rgbaFrame[srcIndex];
-                            rgbFrame[dstIndex + 1] = rgbaFrame[srcIndex + 1];
-                            rgbFrame[dstIndex + 2] = rgbaFrame[srcIndex + 2];
-                        }
-                    }
-                }
-                else if (_modulator is DctModulator)
-                {
-                    var rgbaFrame = DctModulator.CreatePhase3Frame(_width, _height, borderWidth: 32, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
-                    rgbFrame = new byte[_width * _height * 3];
-                    for (int y = 0; y < _height; y++)
-                    {
-                        for (int x = 0; x < _width; x++)
-                        {
-                            int srcIndex = (y * _width + x) * 4;
-                            int dstIndex = (y * _width + x) * 3;
-                            rgbFrame[dstIndex] = rgbaFrame[srcIndex];
-                            rgbFrame[dstIndex + 1] = rgbaFrame[srcIndex + 1];
-                            rgbFrame[dstIndex + 2] = rgbaFrame[srcIndex + 2];
-                        }
-                    }
-                }
-                else
-                {
-                    var info = new SKImageInfo(_width, _height, SKColorType.Rgba8888, SKAlphaType.Opaque);
-                    using var surface = SKSurface.Create(info);
-                    var canvas = surface.Canvas;
-
-                    canvas.Clear(SKColors.Black);
-
-                    for (int by = 0; by < blocksY; by++)
-                    {
-                        for (int bx = 0; bx < blocksX; bx++)
-                        {
-                            int frameBitIndex = by * blocksX + bx;
-                            bool bit = false;
-                            if (frameBitIndex < framePacket.Length * 8)
-                            {
-                                int byteIdx = frameBitIndex / 8;
-                                int bitInByte = 7 - (frameBitIndex % 8);
-                                bit = ((framePacket[byteIdx] >> bitInByte) & 1) != 0;
-                            }
-
-                            int x = bx * _macroblockSize;
-                            int y = by * _macroblockSize;
-                            var rect = new SKRectI(x, y, x + _macroblockSize, y + _macroblockSize);
-                            canvas.DrawRect(rect, bit ? paintWhite : paintBlack);
-                        }
-                    }
-
-                    using var image = surface.Snapshot();
-                    using var pixmap = image.PeekPixels();
-
-                    int rowBytes = _width * 3;
-                    int frameBytes = rowBytes * _height;
-                    int srcTotal = pixmap.RowBytes * _height;
-                    var srcBuf = ArrayPool<byte>.Shared.Rent(srcTotal);
-                    var dstBuf = ArrayPool<byte>.Shared.Rent(frameBytes);
-                    try
-                    {
-                        var srcPtr = pixmap.GetPixels();
-                        System.Runtime.InteropServices.Marshal.Copy(srcPtr, srcBuf, 0, srcTotal);
-
-                        Span<byte> srcSpan = srcBuf.AsSpan(0, srcTotal);
-                        Span<byte> dstSpan = dstBuf.AsSpan(0, frameBytes);
-
-                        for (int row = 0; row < _height; row++)
-                        {
-                            int srcRowStart = row * pixmap.RowBytes;
-                            int dstRowStart = row * rowBytes;
-                            for (int col = 0; col < _width; col++)
-                            {
-                                int srcIdx = srcRowStart + col * 4;
-                                int dstIdx = dstRowStart + col * 3;
-                                dstSpan[dstIdx] = srcSpan[srcIdx];
-                                dstSpan[dstIdx + 1] = srcSpan[srcIdx + 1];
-                                dstSpan[dstIdx + 2] = srcSpan[srcIdx + 2];
-                            }
-                        }
-
-                        rgbFrame = dstBuf.ToArray();
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(srcBuf);
-                        ArrayPool<byte>.Shared.Return(dstBuf);
-                    }
-                }
-
-                if (rgbFrame != null)
-                {
-                    for (int rep = 0; rep < 3; rep++)
-                    {
-                        await stdin.WriteAsync(rgbFrame, 0, rgbFrame.Length);
-                        await stdin.FlushAsync();
-                    }
+                    await stdin.WriteAsync(rgbFrame, 0, rgbFrame.Length);
+                    await stdin.FlushAsync();
                 }
             }
 
@@ -203,60 +170,12 @@ namespace YTAHD.Core.Core
                         parityPayload[i] ^= payload[i];
                     }
 
-                    var framePacket = new byte[HeaderBytes + payloadBytesPerFrame];
-                    framePacket[0] = (byte)((FrameMagic >> 8) & 0xFF);
-                    framePacket[1] = (byte)(FrameMagic & 0xFF);
-                    framePacket[2] = FrameVersion;
-                    framePacket[3] = FrameTypeData;
-                    framePacket[4] = (byte)((frameIdx >> 24) & 0xFF);
-                    framePacket[5] = (byte)((frameIdx >> 16) & 0xFF);
-                    framePacket[6] = (byte)((frameIdx >> 8) & 0xFF);
-                    framePacket[7] = (byte)(frameIdx & 0xFF);
-                    framePacket[8] = (byte)((totalDataFrames >> 24) & 0xFF);
-                    framePacket[9] = (byte)((totalDataFrames >> 16) & 0xFF);
-                    framePacket[10] = (byte)((totalDataFrames >> 8) & 0xFF);
-                    framePacket[11] = (byte)(totalDataFrames & 0xFF);
-                    framePacket[12] = (byte)((groupStart >> 24) & 0xFF);
-                    framePacket[13] = (byte)((groupStart >> 16) & 0xFF);
-                    framePacket[14] = (byte)((groupStart >> 8) & 0xFF);
-                    framePacket[15] = (byte)(groupStart & 0xFF);
-                    framePacket[16] = (byte)groupCount;
-                    framePacket[17] = (byte)((payloadLen >> 8) & 0xFF);
-                    framePacket[18] = (byte)(payloadLen & 0xFF);
-
-                    var hash = SHA256.HashData(payload.AsSpan(0, payloadLen));
-                    Buffer.BlockCopy(hash, 0, framePacket, 19, hash.Length);
-                    Buffer.BlockCopy(payload, 0, framePacket, HeaderBytes, payloadBytesPerFrame);
-
+                    var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
                     await WriteFramePacketAsync(framePacket);
                     dataOffset += payloadLen;
                 }
 
-                var parityPacket = new byte[HeaderBytes + payloadBytesPerFrame];
-                parityPacket[0] = (byte)((FrameMagic >> 8) & 0xFF);
-                parityPacket[1] = (byte)(FrameMagic & 0xFF);
-                parityPacket[2] = FrameVersion;
-                parityPacket[3] = FrameTypeParity;
-                parityPacket[4] = 0;
-                parityPacket[5] = 0;
-                parityPacket[6] = 0;
-                parityPacket[7] = 0;
-                parityPacket[8] = (byte)((totalDataFrames >> 24) & 0xFF);
-                parityPacket[9] = (byte)((totalDataFrames >> 16) & 0xFF);
-                parityPacket[10] = (byte)((totalDataFrames >> 8) & 0xFF);
-                parityPacket[11] = (byte)(totalDataFrames & 0xFF);
-                parityPacket[12] = (byte)((groupStart >> 24) & 0xFF);
-                parityPacket[13] = (byte)((groupStart >> 16) & 0xFF);
-                parityPacket[14] = (byte)((groupStart >> 8) & 0xFF);
-                parityPacket[15] = (byte)(groupStart & 0xFF);
-                parityPacket[16] = (byte)groupCount;
-                parityPacket[17] = (byte)((payloadBytesPerFrame >> 8) & 0xFF);
-                parityPacket[18] = (byte)(payloadBytesPerFrame & 0xFF);
-
-                var parityHash = SHA256.HashData(parityPayload);
-                Buffer.BlockCopy(parityHash, 0, parityPacket, 19, parityHash.Length);
-                Buffer.BlockCopy(parityPayload, 0, parityPacket, HeaderBytes, payloadBytesPerFrame);
-
+                var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
                 await WriteFramePacketAsync(parityPacket);
             }
 
