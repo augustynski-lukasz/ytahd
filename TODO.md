@@ -219,6 +219,32 @@ CHORE-008 — Ignore generated temporary test files and artifacts
 BUG-002 — Make the Phase 1 decoder tolerant of lossy compressed video instead of assuming a bit-perfect signal
 
 - Status: completed
+- Done: 2026-08-30
+- Notes: real H.264 encode/decode validation passes after aligning the Phase 1 packet geometry and guarding against empty decode results
+
+BUG-003 — Normalize the Phase 1 binary modulator contract to a consistent 16×16 macroblock layout
+
+- Status: in-progress
+- Started: 2026-08-30
+- Notes: this is the current project guardrail; the encoder and decoder now share one macroblock-size contract to prevent real ffmpeg streams from decoding as all-zero or invalid packets
+
+FEAT-035 — Add an explicit real-ffmpeg regression test suite for H.264 smoke validation
+
+- Status: not-started
+- Notes: keep the command-line encode/decode smoke path in a repeatable test harness so future regressions are caught immediately
+
+FEAT-036 — Harden the lossy decoder with quality-aware packet filtering and duplicate-run scoring
+
+- Status: not-started
+- Notes: continue to tolerate real video drift without silently accepting totally empty or corrupt payload streams
+
+FEAT-037 — Document the H.264 baseline and ffmpeg override behavior in the CLI and README
+
+- Status: not-started
+- Notes: make the Phase 1 defaults and supported ffmpeg-path options explicit for local and CI users
+
+
+- Status: completed
 - Done: 2026-08-30 (updated `DecoderEngine` to use threshold-based sampling, accept lossy bit drift, and validate logical payload signatures instead of exact raw pixel equality)
 
 BUG-003 — Finalize the real FFmpeg-based Phase 1 pipeline for lossy encode/decode integration

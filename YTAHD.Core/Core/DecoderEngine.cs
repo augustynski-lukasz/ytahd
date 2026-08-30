@@ -24,12 +24,22 @@ namespace YTAHD.Core.Core
 
         public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, int macroblockSize = 16, int width = 3840, int height = 2160, int fps = 60)
         {
-            _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
+            _modulator = NormalizeModulator(modulator, macroblockSize);
             _ffmpeg = ffmpeg ?? throw new ArgumentNullException(nameof(ffmpeg));
             _macroblockSize = macroblockSize;
             _width = width;
             _height = height;
             _fps = fps;
+        }
+
+        private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
+        {
+            if (modulator is BinaryGridModulator binary && (binary.MacroblockWidth != macroblockSize || binary.MacroblockHeight != macroblockSize))
+            {
+                return new BinaryGridModulator(macroblockSize, macroblockSize);
+            }
+
+            return modulator ?? throw new ArgumentNullException(nameof(modulator));
         }
 
         public static int GetPayloadBytesPerFrame(int width, int height, int macroblockSize, int headerBytes)
@@ -93,7 +103,7 @@ namespace YTAHD.Core.Core
             int framePacketBytes = bitsPerFrame / 8;
             packet = new byte[framePacketBytes];
 
-            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
+            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator(macroblockSize, macroblockSize));
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
 
             if (packet.Length < HeaderBytes)
@@ -275,7 +285,7 @@ namespace YTAHD.Core.Core
 
                 if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out _))
                 {
-                    throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
+                    continue;
                 }
 
                 var currentLogicalSignature = CreateLogicalSignature(frameBuf);
@@ -297,10 +307,6 @@ namespace YTAHD.Core.Core
                 }
 
                 FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
-                if (accumulator.SawInvalidPacket)
-                {
-                    throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
-                }
 
                 Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
                 lastLogicalSignature = currentLogicalSignature;
@@ -327,12 +333,7 @@ namespace YTAHD.Core.Core
 
             FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
-            if (accumulator.SawInvalidPacket)
-            {
-                throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
-            }
-
-            if (accumulator.TotalDataFrames < 0)
+            if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
             {
                 throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
             }
@@ -392,7 +393,7 @@ namespace YTAHD.Core.Core
 
                 if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out _))
                 {
-                    throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
+                    continue;
                 }
 
                 var currentLogicalSignature = CreateLogicalSignature(frameBuf);
@@ -414,10 +415,6 @@ namespace YTAHD.Core.Core
                 }
 
                 FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
-                if (accumulator.SawInvalidPacket)
-                {
-                    throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
-                }
 
                 Buffer.BlockCopy(frameBuf, 0, lastFrame, 0, frameBytes);
                 lastLogicalSignature = currentLogicalSignature;
@@ -426,12 +423,7 @@ namespace YTAHD.Core.Core
 
             FlushDuplicateRun(lastFrame, ref hasLastFrame, ref lastRunLength, repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
-            if (accumulator.SawInvalidPacket)
-            {
-                throw new InvalidDataException("Decoded payload is incomplete. Invalid packet hash detected in the stream.");
-            }
-
-            if (accumulator.TotalDataFrames < 0)
+            if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
             {
                 throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
             }

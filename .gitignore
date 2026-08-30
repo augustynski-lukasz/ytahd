@@ -45,6 +45,9 @@ temp/
 *_tmp*
 *_temp*
 tmp_ffmpeg_*
+*.mp4
+*.bin
+*.rgb
 
 # Coverage
 coverage.*
@@ -53,3 +56,4 @@ coverage.*
 
 # Secrets
 secrets.json
+probe-input.bin

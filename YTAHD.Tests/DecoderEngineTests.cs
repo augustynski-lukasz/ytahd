@@ -282,6 +282,44 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task DecodeFromRgbStream_Skips_Invalid_Packets_And_Continues()
+        {
+            var tmpIn = Path.GetTempFileName();
+            var tmpOut = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[16];
+                new Random(101).NextBytes(data);
+                await File.WriteAllBytesAsync(tmpIn, data);
+
+                var mod = new BinaryGridModulator();
+                var fake = new FakeFFmpegWrapper(Width, Height, 30);
+                var encoder = new EncoderEngine(mod, fake, Macroblock, Width, Height, 30);
+                await encoder.EncodeAsync(tmpIn, "out.mp4");
+
+                var raw = fake.Process?.Buffer?.ToArray();
+                Assert.NotNull(raw);
+
+                int frameBytes = Width * Height * 3;
+                int invalidFrameOffset = 2 * frameBytes;
+                Array.Clear(raw, invalidFrameOffset, frameBytes);
+
+                using var stream = new MemoryStream(raw, writable: false);
+                var decoder = new DecoderEngine(mod, fake);
+
+                await decoder.DecodeFromRgbStreamAsync(stream, Width, Height, Macroblock, data.Length, tmpOut);
+
+                var outData = await File.ReadAllBytesAsync(tmpOut);
+                Assert.Equal(data, outData);
+            }
+            finally
+            {
+                File.Delete(tmpIn);
+                File.Delete(tmpOut);
+            }
+        }
+
+        [Fact]
         public async Task DecodeFromRgbStream_Recovers_When_OneDataFrameLostInParityGroup()
         {
             var tmpIn = Path.GetTempFileName();

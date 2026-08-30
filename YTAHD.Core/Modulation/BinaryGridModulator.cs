@@ -10,7 +10,7 @@ namespace YTAHD.Core.Modulation
         private readonly int _macroblockWidth;
         private readonly int _macroblockHeight;
 
-        public BinaryGridModulator(int macroblockWidth = 1, int macroblockHeight = 1)
+        public BinaryGridModulator(int macroblockWidth = 16, int macroblockHeight = 16)
         {
             if (macroblockWidth <= 0) throw new ArgumentOutOfRangeException(nameof(macroblockWidth));
             if (macroblockHeight <= 0) throw new ArgumentOutOfRangeException(nameof(macroblockHeight));

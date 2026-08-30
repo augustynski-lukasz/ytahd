@@ -60,9 +60,10 @@ namespace YTAHD.Core.Infrastructure
                 File.Delete(outputPath);
             }
 
-            // Use a lossless codec here: libx264 introduces lossy quantization and will corrupt the 
-            // binary modulation payload before the custom decoder can recover it.
-            var args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v ffv1 -an \"{outputPath}\"";
+            // Use a container-compatible H.264 output for real mp4 smoke tests. The project keeps its
+            // custom binary frame protocol and decoder tolerance; the real FFmpeg layer only needs a valid
+            // codec/container pair so the encoded stream can be decoded back for end-to-end validation.
+            var args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
 
             var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)
             {

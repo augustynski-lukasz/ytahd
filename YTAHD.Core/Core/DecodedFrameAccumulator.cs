@@ -30,7 +30,7 @@ namespace YTAHD.Core.Core
             int framePacketBytes = bitsPerFrame / 8;
             var packet = new byte[framePacketBytes];
 
-            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
+            var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator(macroblockSize, macroblockSize));
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
 
             if (packet.Length < FramePacket.HeaderBytes)

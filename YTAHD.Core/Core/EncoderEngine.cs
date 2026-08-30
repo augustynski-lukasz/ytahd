@@ -28,12 +28,22 @@ namespace YTAHD.Core.Core
 
         public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, int macroblockSize = 16, int width = 3840, int height = 2160, int fps = 60)
         {
-            _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
+            _modulator = NormalizeModulator(modulator, macroblockSize);
             _ffmpeg = ffmpeg ?? throw new ArgumentNullException(nameof(ffmpeg));
             _macroblockSize = macroblockSize;
             _width = width;
             _height = height;
             _fps = fps;
+        }
+
+        private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
+        {
+            if (modulator is BinaryGridModulator binary && (binary.MacroblockWidth != macroblockSize || binary.MacroblockHeight != macroblockSize))
+            {
+                return new BinaryGridModulator(macroblockSize, macroblockSize);
+            }
+
+            return modulator ?? throw new ArgumentNullException(nameof(modulator));
         }
 
         public static byte[] CreateDataFramePacket(int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength, ReadOnlySpan<byte> payload, int payloadCapacity = 0)
