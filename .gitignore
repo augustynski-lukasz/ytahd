@@ -44,6 +44,7 @@ tmp/
 temp/
 *_tmp*
 *_temp*
+tmp_ffmpeg_*
 
 # Coverage
 coverage.*
