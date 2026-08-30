@@ -78,54 +78,7 @@ namespace YTAHD.Core.Core
 
         private async Task<int> GetActualVideoFrameCountAsync(string videoPath)
         {
-            if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
-            {
-                return 0;
-            }
-
-            var ffprobePath = "ffprobe";
-            var ffmpegDir = Path.GetDirectoryName(_ffmpeg.ExecutablePath);
-            if (!string.IsNullOrWhiteSpace(ffmpegDir))
-            {
-                var candidate = Path.Combine(ffmpegDir, "ffprobe.exe");
-                if (File.Exists(candidate))
-                {
-                    ffprobePath = candidate;
-                }
-                else
-                {
-                    var altCandidate = Path.Combine(ffmpegDir, "ffprobe");
-                    if (File.Exists(altCandidate))
-                    {
-                        ffprobePath = altCandidate;
-                    }
-                }
-            }
-
-            var psi = new ProcessStartInfo(ffprobePath, $"-v error -select_streams v:0 -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 \"{videoPath}\"")
-            {
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-
-            try
-            {
-                using var process = Process.Start(psi);
-                if (process == null)
-                {
-                    return 0;
-                }
-
-                var output = await process.StandardOutput.ReadToEndAsync();
-                await process.WaitForExitAsync();
-                return int.TryParse(output.Trim(), out var frames) ? frames : 0;
-            }
-            catch
-            {
-                return 0;
-            }
+            return await FFmpegProbe.GetVideoFrameCountAsync(videoPath, _ffmpeg.ExecutablePath);
         }
 
         public async Task EncodeAsync(string inputFile, string outputVideo)

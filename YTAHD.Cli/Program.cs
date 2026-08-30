@@ -4,6 +4,7 @@ using System.CommandLine.Invocation;
 using System.IO;
 using System.Threading.Tasks;
 using YTAHD.Core.Application;
+using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
 static IModulator CreateModulator(string mode)
@@ -20,46 +21,7 @@ static IModulator CreateModulator(string mode)
 // Build a simple command line with extensible options (future-friendly)
 static int TryGetVideoFrameCount(string videoPath)
 {
-    if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
-    {
-        return 0;
-    }
-
-    var ffprobePath = "ffprobe";
-    var ffmpegDir = Path.GetDirectoryName("ffmpeg");
-    if (!string.IsNullOrWhiteSpace(ffmpegDir))
-    {
-        var candidate = Path.Combine(ffmpegDir, "ffprobe.exe");
-        if (File.Exists(candidate))
-        {
-            ffprobePath = candidate;
-        }
-    }
-
-    try
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo(ffprobePath, $"-v error -select_streams v:0 -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 \"{videoPath}\"")
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        using var process = System.Diagnostics.Process.Start(psi);
-        if (process == null)
-        {
-            return 0;
-        }
-
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-        return int.TryParse(output.Trim(), out var frames) ? frames : 0;
-    }
-    catch
-    {
-        return 0;
-    }
+    return FFmpegProbe.GetVideoFrameCountAsync(videoPath).GetAwaiter().GetResult();
 }
 
 var root = new RootCommand("YTAHD - encode/decode binary data into resilient video frames");

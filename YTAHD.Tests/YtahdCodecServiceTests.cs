@@ -117,6 +117,43 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task FFprobe_Reports_FrameCount_For_Short_Video_Clip()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the FFprobe regression test.");
+
+            var inputFile = Path.GetTempFileName();
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+
+            try
+            {
+                var payload = new byte[20];
+                new Random(42).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var service = new YtahdCodecService(new BinaryGridModulator(), new DefaultFFmpegWrapperFactory(ffmpegPath));
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                var actualFrames = await FFmpegProbe.GetVideoFrameCountAsync(outputVideo, ffmpegPath);
+                Assert.True(actualFrames > 0, $"Expected ffprobe to report at least one frame for a short valid MP4 stream. Actual: {actualFrames}.");
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+            }
+        }
+
+        [Fact]
         public async Task RealFfmpeg_RoundTrip_EncodeDecode_Succeeds()
         {
             var ffmpegPath = GetAvailableFfmpegPath();

@@ -248,6 +248,28 @@ CHORE-009 — Keep the TODO aligned with the real production codec contract
 - Done: 2026-08-30
 - Notes: real FFmpeg/libx264 behavior is the source of truth for validation, and tests now assert against actual output metrics instead of synthetic assumptions.
 
+FEAT-038 — Fix short-video ffprobe reliability for real H.264 outputs
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: a shared FFprobe helper is now used by the CLI and encoder, and short MP4 outputs report actual frame counts instead of falling back to 0 when ffprobe emits sparse output.
+
+FEAT-039 — Run a larger real-payload end-to-end regression matrix for Phase 1 / Phase 2 / Phase 3
+
+- Status: in-progress
+- Owner: current work
+- Notes: exercise several payload sizes across the genuine libx264 pipeline and confirm byte-for-byte round-trips plus stable metrics.
+
+FEAT-040 — Capture a documented real-codec throughput baseline and reliability checklist
+
+- Status: backlog
+- Notes: measure encode/decode throughput, payload-per-frame capacity, and failure modes for short vs large payloads and record the expected operating envelope.
+
+CHORE-010 — Tidy remaining warnings and dependency advisory cleanup
+
+- Status: backlog
+- Notes: address remaining nullable warnings and the SkiaSharp security advisory after the core production behavior is stable.
+
 BUG-002 — Make the Phase 1 decoder tolerant of lossy compressed video instead of assuming a bit-perfect signal
 
 - Status: completed
