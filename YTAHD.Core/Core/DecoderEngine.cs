@@ -46,18 +46,7 @@ namespace YTAHD.Core.Core
 
         public static int GetPayloadBytesPerFrame(int width, int height, int macroblockSize, int headerBytes)
         {
-            if (width <= 0 || height <= 0)
-                throw new ArgumentOutOfRangeException(nameof(width));
-            if (macroblockSize <= 0)
-                throw new ArgumentOutOfRangeException(nameof(macroblockSize));
-            if (headerBytes < 0)
-                throw new ArgumentOutOfRangeException(nameof(headerBytes));
-
-            int blocksX = width / macroblockSize;
-            int blocksY = height / macroblockSize;
-            int bitsPerFrame = blocksX * blocksY;
-            int payloadBitsPerFrame = bitsPerFrame - (headerBytes * 8);
-            return payloadBitsPerFrame >= 8 ? payloadBitsPerFrame / 8 : 0;
+            return FrameLayoutCalculator.CalculatePayloadBytesPerFrame(width, height, macroblockSize, macroblockSize, headerBytes, 0);
         }
 
         public static bool TryParseFramePacket(byte[] packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)

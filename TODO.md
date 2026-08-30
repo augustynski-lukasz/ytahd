@@ -292,9 +292,9 @@ FEAT-040 — Freeze the Phase 1 H.264 baseline as the stable production contract
 
 REFACTOR-004 — Extract frame-layout calculation into a dedicated helper class
 
-- Status: in-progress
-- Owner: core architect
-- Notes: Move all geometry and payload-capacity calculations out of `DecoderEngine` and the modulation layer into a single `FrameLayoutCalculator` helper that owns the block-count math, usable-area sizing, and capacity validation.
+- Status: completed
+- Done: 2026-08-30
+- Notes: moved the geometry and payload-capacity math into `FrameLayoutCalculator`, and both the decoder and `BinaryGridModulator` call that shared helper to keep the calculation consistent.
 - Acceptance criteria:
   - `DecoderEngine.GetPayloadBytesPerFrame` is replaced by a helper call from the decoder and/or the modulator.
   - `BinaryGridModulator.GetPayloadBytesPerFrame` delegates to the helper for consistent geometry math.

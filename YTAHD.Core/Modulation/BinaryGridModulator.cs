@@ -24,19 +24,9 @@ namespace YTAHD.Core.Modulation
 
         public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
         {
-            if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-            if (headerBytes < 0) throw new ArgumentOutOfRangeException(nameof(headerBytes));
-            if (borderWidth < 0) throw new ArgumentOutOfRangeException(nameof(borderWidth));
-
             int blockWidth = macroblockSize > 0 ? macroblockSize : _macroblockWidth;
             int blockHeight = macroblockSize > 0 ? macroblockSize : _macroblockHeight;
-            int usableWidth = Math.Max(0, width - (borderWidth * 2));
-            int usableHeight = Math.Max(0, height - (borderWidth * 2));
-            int blocksX = Math.Max(1, usableWidth / blockWidth);
-            int blocksY = Math.Max(1, usableHeight / blockHeight);
-            int bitsPerFrame = blocksX * blocksY;
-            int payloadBitsPerFrame = bitsPerFrame - (headerBytes * 8);
-            return Math.Max(0, payloadBitsPerFrame / 8);
+            return YTAHD.Core.Core.FrameLayoutCalculator.CalculatePayloadBytesPerFrame(width, height, blockWidth, blockHeight, headerBytes, borderWidth);
         }
 
         public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
