@@ -33,6 +33,34 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public void BinaryGrid_PerFrame_Capacity_Matches_FrameLayout_Contract()
+        {
+            const int width = 640;
+            const int height = 480;
+            const int headerBytes = 51;
+
+            var mod = new BinaryGridModulator();
+            int expected = FrameLayoutCalculator.CalculatePayloadBytesPerFrame(width, height, mod.MacroblockWidth, mod.MacroblockHeight, headerBytes, borderWidth: 0);
+            int actual = mod.GetPayloadBytesPerFrame(width, height, headerBytes, borderWidth: 0, macroblockSize: mod.MacroblockWidth);
+
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
+        public void PseudoQam_PerFrame_Capacity_Matches_Block_Count_Contract()
+        {
+            const int width = 640;
+            const int height = 480;
+            const int headerBytes = 51;
+
+            var mod = new PseudoQamModulator();
+            int expected = ((width / mod.MacroblockWidth) * (height / mod.MacroblockHeight)) - headerBytes;
+            int actual = mod.GetPayloadBytesPerFrame(width, height, headerBytes, borderWidth: 0, macroblockSize: mod.MacroblockWidth);
+
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
         public void CreateDataFramePacket_Uses_Expected_Header_Layout()
         {
             var payload = new byte[] { 10, 20, 30, 40 };
