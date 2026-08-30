@@ -332,6 +332,16 @@ REFACTOR-007 — Limit `IModulator` to visual mapping and make decoder/encoder r
   - Transport, parity, and duplicate-run logic live in the decoder pipeline or a packet codec.
   - New modulation algorithms can be swapped without changing the stream/recovery pipeline contract.
 
+REFACTOR-010 — Consolidate shared protocol helpers out of the engine types and into a central helper
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: `FrameProtocolHelpers` now owns the shared packet creation/parsing, quality scoring, geometry, and RGB conversion helpers, and both the encoder and decoder delegate through that surface.
+- Acceptance criteria:
+  - `EncoderEngine` and `DecoderEngine` no longer carry duplicate helper logic for packet creation, parsing, scoring, or RGB conversion.
+  - The helper centralizes each protocol-level responsibility in one place for consistent behavior across algorithms.
+  - Regression tests still pass without altering the H.264 compatibility contract.
+
 REFACTOR-008 — Extract the decode stream loop into a dedicated pipeline orchestrator
 
 - Status: not-started

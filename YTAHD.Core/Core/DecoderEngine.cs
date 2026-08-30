@@ -46,17 +46,17 @@ namespace YTAHD.Core.Core
 
         public static int GetPayloadBytesPerFrame(int width, int height, int macroblockSize, int headerBytes)
         {
-            return FrameLayoutCalculator.CalculatePayloadBytesPerFrame(width, height, macroblockSize, macroblockSize, headerBytes, 0);
+            return FrameProtocolHelpers.GetPayloadBytesPerFrame(width, height, macroblockSize, headerBytes);
         }
 
         public static bool TryParseFramePacket(byte[] packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
         {
-            return FramePacketCodec.TryDecode(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
+            return FrameProtocolHelpers.TryParseFramePacket(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
         }
 
         public static int GetPacketQualityScore(ReadOnlySpan<byte> packet)
         {
-            return PacketQualityScorer.Score(packet);
+            return FrameProtocolHelpers.GetPacketQualityScore(packet);
         }
 
         private static int GetDuplicateFrameCount(int lastRunLength, int repeatedFrameCount)
