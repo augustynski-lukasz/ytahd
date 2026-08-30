@@ -218,6 +218,36 @@ CHORE-008 — Ignore generated temporary test files and artifacts
 - Status: completed
 - Done: 2026-08-30
 
+BUG-002 — Harden the lossy H.264 decoder against drift, duplicate frames, and weak payloads
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: Phase 1 decoder now scores luminance candidates instead of assuming a single threshold under real libx264 output.
+
+FEAT-035 — Add explicit FFmpeg path override with PATH fallback in CLI and wrapper factory
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: CLI supports `--ffmpeg-path` and defaults to resolving `ffmpeg` from `PATH` when not set.
+
+FEAT-036 — Consolidate codec configuration into shared options and geometry contracts
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: `VideoCodecOptions` and shared `ModulatorGeometry` replace duplicated option/config plumbing and keep the API consistent across encoder/decoder entry points.
+
+FEAT-037 — Add real FFmpeg payload/frame telemetry to encode/decode summaries
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: CLI output now reports payload size, payload-per-frame capacity, frames written, actual `ffprobe` frame count, and decode totals for seen/decoded payload bytes.
+
+CHORE-009 — Keep the TODO aligned with the real production codec contract
+
+- Status: completed
+- Done: 2026-08-30
+- Notes: real FFmpeg/libx264 behavior is the source of truth for validation, and tests now assert against actual output metrics instead of synthetic assumptions.
+
 BUG-002 — Make the Phase 1 decoder tolerant of lossy compressed video instead of assuming a bit-perfect signal
 
 - Status: completed

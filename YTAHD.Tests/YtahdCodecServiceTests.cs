@@ -78,6 +78,44 @@ namespace YTAHD.Tests
             Assert.True(isAvailable);
         }
 
+        private static async Task<int> GetActualVideoFrameCountAsync(string videoPath)
+        {
+            var ffprobePath = "ffprobe";
+            if (File.Exists("D:\\!Tools\\ffmpeg-20151019\\bin\\ffprobe.exe"))
+            {
+                ffprobePath = "D:\\!Tools\\ffmpeg-20151019\\bin\\ffprobe.exe";
+            }
+
+            var psi = new System.Diagnostics.ProcessStartInfo(ffprobePath, $"-v error -select_streams v:0 -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 \"{videoPath}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process == null)
+            {
+                return 0;
+            }
+
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            return int.TryParse(output.Trim(), out var frames) ? frames : 0;
+        }
+
+        [Fact]
+        public async Task FFmpegWrapper_Rejects_NonPositiveFrameRate()
+        {
+            var wrapper = new FFmpegWrapper(640, 480, 0);
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => wrapper.StartAsync(Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4")));
+
+            Assert.Contains("FPS", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
         [Fact]
         public async Task RealFfmpeg_RoundTrip_EncodeDecode_Succeeds()
         {
@@ -107,6 +145,13 @@ namespace YTAHD.Tests
                     VerifyFfmpeg = true
                 });
 
+                var actualFrames = await GetActualVideoFrameCountAsync(outputVideo);
+                var encodeMetrics = service.LastEncodeMetrics;
+                Assert.True(actualFrames > 0, $"Expected encoded video to contain at least one frame. Actual frames reported by ffprobe: {actualFrames}.");
+                Assert.True(encodeMetrics.TotalFramesWritten > 0, $"Expected encode metrics to report written frames. Actual: {encodeMetrics.TotalFramesWritten}.");
+                Assert.Equal(payload.Length, encodeMetrics.InputPayloadBytes);
+                Assert.Equal(actualFrames, encodeMetrics.TotalFramesInVideo);
+
                 await service.DecodeAsync(new DecodeOptions
                 {
                     InputVideo = outputVideo,
@@ -120,6 +165,8 @@ namespace YTAHD.Tests
 
                 var decoded = await File.ReadAllBytesAsync(outputFile);
                 Assert.Equal(payload, decoded);
+                Assert.Equal(payload.Length, service.LastDecodeMetrics.TotalDecodedPayloadBytes);
+                Assert.True(service.LastDecodeMetrics.TotalFramesDecoded > 0, $"Expected decode metrics to report decoded frames. Actual: {service.LastDecodeMetrics.TotalFramesDecoded}.");
             }
             finally
             {

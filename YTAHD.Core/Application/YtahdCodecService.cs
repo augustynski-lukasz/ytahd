@@ -10,6 +10,9 @@ public sealed class YtahdCodecService
     private readonly IModulator _modulator;
     private readonly IFFmpegWrapperFactory _ffmpegFactory;
 
+    public EncodeMetrics LastEncodeMetrics { get; private set; } = new();
+    public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
+
     public YtahdCodecService(IModulator modulator, IFFmpegWrapperFactory ffmpegFactory)
     {
         _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
@@ -31,6 +34,7 @@ public sealed class YtahdCodecService
         }
 
         await engine.EncodeAsync(options.InputFile, options.OutputVideo);
+        LastEncodeMetrics = engine.LastEncodeMetrics;
     }
 
     public async Task DecodeAsync(DecodeOptions options)
@@ -48,6 +52,7 @@ public sealed class YtahdCodecService
         }
 
         await engine.DecodeAsync(options.InputVideo, options.OutputFile);
+        LastDecodeMetrics = engine.LastDecodeMetrics;
     }
 
     public async Task DecodeFromRgbStreamAsync(DecodeRgbOptions options)
@@ -63,5 +68,6 @@ public sealed class YtahdCodecService
             options.MacroblockSize,
             options.ExpectedOutputBytes,
             options.OutputFile);
+        LastDecodeMetrics = engine.LastDecodeMetrics;
     }
 }

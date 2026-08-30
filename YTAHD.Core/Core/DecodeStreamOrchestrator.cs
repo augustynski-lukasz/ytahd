@@ -112,6 +112,8 @@ namespace YTAHD.Core.Core
             accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, resolvedExpectedBytes);
             metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
             metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
+            metrics.TotalDecodedPayloadBytes = resolvedExpectedBytes;
+            metrics.TotalFramesDecoded = accumulator.TotalDataFrames;
             LastDecodeMetrics = metrics;
 
             return accumulator.AssembleOutput(resolvedExpectedBytes);

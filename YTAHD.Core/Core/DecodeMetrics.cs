@@ -9,6 +9,8 @@ namespace YTAHD.Core.Core
         public int DuplicateRunCount { get; set; }
         public int RecoveredGroupCount { get; set; }
         public int StrongestDuplicateQuality { get; set; }
+        public int TotalDecodedPayloadBytes { get; set; }
+        public int TotalFramesDecoded { get; set; }
 
         public double InvalidPacketRatio => TotalFramesSeen > 0 ? InvalidPacketCount / (double)TotalFramesSeen : 0d;
     }

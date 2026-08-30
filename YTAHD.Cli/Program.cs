@@ -18,6 +18,50 @@ static IModulator CreateModulator(string mode)
 }
 
 // Build a simple command line with extensible options (future-friendly)
+static int TryGetVideoFrameCount(string videoPath)
+{
+    if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
+    {
+        return 0;
+    }
+
+    var ffprobePath = "ffprobe";
+    var ffmpegDir = Path.GetDirectoryName("ffmpeg");
+    if (!string.IsNullOrWhiteSpace(ffmpegDir))
+    {
+        var candidate = Path.Combine(ffmpegDir, "ffprobe.exe");
+        if (File.Exists(candidate))
+        {
+            ffprobePath = candidate;
+        }
+    }
+
+    try
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(ffprobePath, $"-v error -select_streams v:0 -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 \"{videoPath}\"")
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using var process = System.Diagnostics.Process.Start(psi);
+        if (process == null)
+        {
+            return 0;
+        }
+
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        return int.TryParse(output.Trim(), out var frames) ? frames : 0;
+    }
+    catch
+    {
+        return 0;
+    }
+}
+
 var root = new RootCommand("YTAHD - encode/decode binary data into resilient video frames");
 
 var argIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -44,6 +88,7 @@ encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockS
     var modulator = CreateModulator(modulatorName);
     Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}] ");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
+    var payloadBytes = File.Exists(input.FullName) ? new FileInfo(input.FullName).Length : 0;
     await service.EncodeAsync(new EncodeOptions
     {
         InputFile = input.FullName,
@@ -54,6 +99,10 @@ encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockS
         Fps = fps,
         VerifyFfmpeg = true
     });
+
+    var metrics = service.LastEncodeMetrics;
+    var actualVideoFrames = TryGetVideoFrameCount(output.FullName);
+    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}");
 }, argIn, argOut, optMacro, optWidth, optHeight, optFps, optModulator, optFfmpegPath);
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -76,6 +125,10 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulato
         OutputFile = output.FullName,
         VerifyFfmpeg = true
     });
+
+    var decodeMetrics = service.LastDecodeMetrics;
+    var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}");
 }, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath);
 
 root.AddCommand(encodeCommand);

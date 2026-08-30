@@ -55,6 +55,9 @@ namespace YTAHD.Core.Infrastructure
             if (string.IsNullOrWhiteSpace(outputPath))
                 throw new ArgumentException("Output path is required.", nameof(outputPath));
 
+            if (_fps <= 0)
+                throw new InvalidOperationException($"FFmpeg rawvideo FPS must be greater than zero. Current value: {_fps}.");
+
             if (File.Exists(outputPath))
             {
                 File.Delete(outputPath);

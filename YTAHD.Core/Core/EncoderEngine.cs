@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
@@ -26,6 +27,8 @@ namespace YTAHD.Core.Core
         private readonly int _width;
         private readonly int _height;
         private readonly int _fps;
+
+        public EncodeMetrics LastEncodeMetrics { get; private set; } = new();
 
         public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, int macroblockSize = 16, int width = 3840, int height = 2160, int fps = 60)
         {
@@ -73,6 +76,58 @@ namespace YTAHD.Core.Core
                 throw new InvalidOperationException("ffmpeg not found in PATH or not runnable");
         }
 
+        private async Task<int> GetActualVideoFrameCountAsync(string videoPath)
+        {
+            if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
+            {
+                return 0;
+            }
+
+            var ffprobePath = "ffprobe";
+            var ffmpegDir = Path.GetDirectoryName(_ffmpeg.ExecutablePath);
+            if (!string.IsNullOrWhiteSpace(ffmpegDir))
+            {
+                var candidate = Path.Combine(ffmpegDir, "ffprobe.exe");
+                if (File.Exists(candidate))
+                {
+                    ffprobePath = candidate;
+                }
+                else
+                {
+                    var altCandidate = Path.Combine(ffmpegDir, "ffprobe");
+                    if (File.Exists(altCandidate))
+                    {
+                        ffprobePath = altCandidate;
+                    }
+                }
+            }
+
+            var psi = new ProcessStartInfo(ffprobePath, $"-v error -select_streams v:0 -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 \"{videoPath}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            try
+            {
+                using var process = Process.Start(psi);
+                if (process == null)
+                {
+                    return 0;
+                }
+
+                var output = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                return int.TryParse(output.Trim(), out var frames) ? frames : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         public async Task EncodeAsync(string inputFile, string outputVideo)
         {
             if (!File.Exists(inputFile))
@@ -90,6 +145,16 @@ namespace YTAHD.Core.Core
             int blocksX = _width / _macroblockSize;
             int blocksY = _height / _macroblockSize;
             int totalDataFrames = (data.Length + payloadBytesPerFrame - 1) / payloadBytesPerFrame;
+            int totalFramesWritten = 0;
+
+            LastEncodeMetrics = new EncodeMetrics
+            {
+                InputPayloadBytes = data.Length,
+                PayloadBytesPerFrame = payloadBytesPerFrame,
+                TotalDataFrames = totalDataFrames,
+                TotalFramesWritten = 0,
+                TotalFramesInVideo = 0
+            };
 
             using var ff = await _ffmpeg.StartAsync(outputVideo);
             var stdin = ff.StandardInput;
@@ -137,11 +202,13 @@ namespace YTAHD.Core.Core
 
                         var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
                         await WriteFramePacketAsync(framePacket);
+                        totalFramesWritten++;
                         dataOffset += payloadLen;
                     }
 
                     var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
                     await WriteFramePacketAsync(parityPacket);
+                    totalFramesWritten++;
                 }
             }
             finally
@@ -160,6 +227,15 @@ namespace YTAHD.Core.Core
             }
 
             await ff.WaitForExitAsync();
+            int actualFramesInVideo = await GetActualVideoFrameCountAsync(outputVideo);
+            LastEncodeMetrics = new EncodeMetrics
+            {
+                InputPayloadBytes = data.Length,
+                PayloadBytesPerFrame = payloadBytesPerFrame,
+                TotalDataFrames = totalDataFrames,
+                TotalFramesWritten = totalFramesWritten,
+                TotalFramesInVideo = actualFramesInVideo > 0 ? actualFramesInVideo : totalFramesWritten
+            };
         }
     }
 }
