@@ -290,6 +290,44 @@ FEAT-040 — Freeze the Phase 1 H.264 baseline as the stable production contract
 - Done: 2026-08-30
 - Notes: the current real H.264 path is now the baseline spec for future modulation work and is documented as the stable contract that remains subject to smoke-validation before phase expansion
 
+REFACTOR-004 — Extract frame-layout calculation into a dedicated helper class
+
+- Status: in-progress
+- Owner: core architect
+- Notes: Move all geometry and payload-capacity calculations out of `DecoderEngine` and the modulation layer into a single `FrameLayoutCalculator` helper that owns the block-count math, usable-area sizing, and capacity validation.
+- Acceptance criteria:
+  - `DecoderEngine.GetPayloadBytesPerFrame` is replaced by a helper call from the decoder and/or the modulator.
+  - `BinaryGridModulator.GetPayloadBytesPerFrame` delegates to the helper for consistent geometry math.
+  - Unit tests cover normal, border-adjusted, and degenerate geometry cases.
+  - No direct duplicate layout logic remains between the engine and the modulator.
+
+REFACTOR-005 — Extract packet quality scoring and validity checks into a dedicated scorer
+
+- Status: not-started
+- Notes: Split `DecoderEngine.GetPacketQualityScore` and packet-validation predicates into a `PacketQualityScorer`/validator that can be unit-tested independently from stream orchestration.
+- Acceptance criteria:
+  - All packet quality thresholds are centralized in one class.
+  - Invalid packet, duplicate-run, and lossy-frame scoring rules can be tested without real FFmpeg.
+  - The decoder orchestrator only uses the scorer result, not the underlying scoring implementation details.
+
+REFACTOR-006 — Extract frame packet serialization into a dedicated codec class
+
+- Status: not-started
+- Notes: Move header formatting, parsing, and validation away from the decoder/encoder into a `FramePacketCodec` abstraction that owns the protocol contract for frame metadata, hash checks, and payload length rules.
+- Acceptance criteria:
+  - The packet header format is defined in one place.
+  - Encoder and decoder both use the same codec for metadata writes and reads.
+  - Edge-case tests cover invalid magic/version, bad lengths, and corrupted payloads.
+
+REFACTOR-007 — Limit `IModulator` to visual mapping and make decoder/encoder responsibilities explicit
+
+- Status: not-started
+- Notes: The modulator should describe how bits are laid out in pixels, not how transport packets are parsed, recovered, or validated. Separate visual encoding from data framing and stream recovery.
+- Acceptance criteria:
+  - `IModulator` contains only block layout and symbol mapping behavior.
+  - Transport, parity, and duplicate-run logic live in the decoder pipeline or a packet codec.
+  - New modulation algorithms can be swapped without changing the stream/recovery pipeline contract.
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.
