@@ -114,9 +114,10 @@ internal sealed class PerfOptions
         if (repeatCount <= 0) throw new ArgumentException("--repeat must be > 0.");
         if (parityGroupSize <= 0) throw new ArgumentException("--parity-group must be > 0.");
         if (!string.Equals(modulator, "phase1", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(modulator, "phase2", StringComparison.OrdinalIgnoreCase))
+            !string.Equals(modulator, "phase2", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(modulator, "phase3", StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException("--modulator must be one of: phase1, phase2.");
+            throw new ArgumentException("--modulator must be one of: phase1, phase2, phase3.");
         }
 
         return new PerfOptions
@@ -249,6 +250,7 @@ internal sealed class MetricsCalculator
         {
             "phase1" => 1L,
             "phase2" => 12L,
+            "phase3" => 8L,
             _ => throw new ArgumentException($"Unsupported modulator '{options.Modulator}'.")
         };
 
@@ -403,7 +405,7 @@ internal static class PerfReportPrinter
         Console.WriteLine("  --repeat <n>           Physical repeat count per logical frame (default 3)");
         Console.WriteLine("  --parity-group <n>     Data frames per parity frame for xor-parity (default 4)");
         Console.WriteLine("  --algorithm <name>     repeat | xor-parity (default xor-parity)");
-        Console.WriteLine("  --modulator <name>     phase1 | phase2 (default phase1)");
+        Console.WriteLine("  --modulator <name>     phase1 | phase2 | phase3 (default phase1)");
         Console.WriteLine("  --compare true|false   Compare repeat(x1), repeat(xN), xor-parity (default false)");
         Console.WriteLine("  --help                 Show this help");
         Console.WriteLine();

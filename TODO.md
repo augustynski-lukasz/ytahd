@@ -146,6 +146,23 @@ CHORE-007 — Correct the Phase 2 perf capacity model to match the 12-bit macrob
 - Status: completed
 - Done: 2026-08-30 (perf capacity is now separated by modulator and uses the correct 12-bit Phase 2 payload density)
 
+FEAT-022 — Add DCT carrier basis generation for low-frequency Phase 3 blocks
+
+- Status: in-progress
+- Started: 2026-08-30
+
+FEAT-023 — Implement the Phase 3 DCT-domain modulator encoder/decoder
+
+- Status: not-started
+
+FEAT-024 — Add Phase 3 calibration and decoder-aware coefficient recovery
+
+- Status: not-started
+
+FEAT-025 — Wire Phase 3 modulation into CLI, tests, and perf analysis
+
+- Status: not-started
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

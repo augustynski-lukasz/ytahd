@@ -10,9 +10,10 @@ static IModulator CreateModulator(string mode)
 {
     return mode.Trim().ToLowerInvariant() switch
     {
+        "phase3" or "dct" or "dct-domain" => new DctModulator(),
         "phase2" or "pseudo-qam" or "qam" => new PseudoQamModulator(),
         "phase1" or "binary" or "grid" or "default" or "" => new BinaryGridModulator(),
-        _ => throw new ArgumentException($"Unsupported modulation mode '{mode}'. Use 'phase1' or 'phase2'.", nameof(mode))
+        _ => throw new ArgumentException($"Unsupported modulation mode '{mode}'. Use 'phase1', 'phase2', or 'phase3'.", nameof(mode))
     };
 }
 
@@ -29,7 +30,7 @@ var optMacro = new Option<int>(new[] { "--macroblock-size", "-m" }, () => 16, "M
 var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output video width");
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
-var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1' or 'phase2'");
+var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', or 'phase3'");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
@@ -58,7 +59,7 @@ var decodeOut = new Argument<FileInfo>("output") { Arity = ArgumentArity.Exactly
 var decodeCommand = new Command("decode", "Decode a video back into a binary file");
 decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
-var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1' or 'phase2'");
+var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', or 'phase3'");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName) =>
 {
