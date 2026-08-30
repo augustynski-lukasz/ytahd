@@ -211,6 +211,11 @@ CHORE-008 — Ignore generated temporary test files and artifacts
 - Status: completed
 - Done: 2026-08-30
 
+BUG-002 — Fix Phase 1 decoder to handle lossy compressed video instead of a bit-perfect signal
+
+- Status: completed
+- Done: 2026-08-30 (updated `DecoderEngine` to use threshold-based payload sampling, tolerate lossy bit drift, and validate logical signatures instead of exact raw pixel equality)
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.
