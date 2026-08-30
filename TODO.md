@@ -94,7 +94,8 @@ FEAT-012 — Add CI pipeline (GitHub Actions) to run `dotnet test`
 
 FEAT-013 — Tag v0.1.0 and push to remote (release prep)
 
-- Status: not-started
+- Status: blocked
+- Notes: Local tag creation is ready, but the push is currently blocked by GitHub SSH auth: the remote returned "Permission denied (publickey)" during the push attempt.
 
 FEAT-014 — Add per-frame metadata (frame index, payload length, SHA-256)
 
