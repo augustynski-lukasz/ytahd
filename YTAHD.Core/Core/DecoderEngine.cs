@@ -89,7 +89,7 @@ namespace YTAHD.Core.Core
             lastRunLength = 0;
         }
 
-        private static bool TryReadDecodedPacket(
+        internal static bool TryReadDecodedPacket(
             ReadOnlySpan<byte> frame,
             int width,
             int height,
@@ -236,190 +236,18 @@ namespace YTAHD.Core.Core
         /// </summary>
         public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile)
         {
-            if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
-            if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
-
-            int payloadBytesPerFrame = GetPayloadBytesPerFrame(width, height, macroblockSize, HeaderBytes);
-            if (payloadBytesPerFrame <= 0)
-                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
-
-            int rowBytes = width * 3;
-            int frameBytes = rowBytes * height;
-            int blocksX = width / macroblockSize;
-            int blocksY = height / macroblockSize;
-            int bitsPerFrame = blocksX * blocksY;
-
-            var accumulator = new DecodedFrameAccumulator();
-            const int repeatedFrameCount = 3;
-            byte[] frameBuf = new byte[frameBytes];
-            var duplicateTracker = new DuplicateFrameRunTracker();
-            var metrics = new DecodeMetrics();
-
-            byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
-            {
-                var packet = new byte[bitsPerFrame / 8];
-                var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
-                strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
-                return packet;
-            }
-
-            bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
-            {
-                return accumulator.TryAddDecodedFrame(frame, width, height, macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame);
-            }
-
-            while (true)
-            {
-                int read = 0;
-                while (read < frameBytes)
-                {
-                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
-                    if (r == 0) break;
-                    read += r;
-                }
-
-                if (read < frameBytes) break;
-
-                metrics.TotalFramesSeen++;
-
-                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out var packet))
-                {
-                    metrics.InvalidPacketCount++;
-                    continue;
-                }
-
-                var currentLogicalSignature = CreateLogicalSignature(frameBuf);
-                int currentQuality = GetPacketQualityScore(packet);
-
-                var completedFrame = duplicateTracker.Update(frameBuf, currentLogicalSignature, currentQuality);
-                if (completedFrame is not null)
-                {
-                    metrics.DuplicateRunCount++;
-                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completedFrame.BestQuality);
-                    DecodePayloadFrame(completedFrame.BestFrame);
-                }
-
-                if (expectedOutputBytes > 0)
-                {
-                    int accumulated = 0;
-                    foreach (var kv in accumulator.OrderedPayload)
-                    {
-                        accumulated += kv.Value.Length;
-                        if (accumulated >= expectedOutputBytes)
-                        {
-                            break;
-                        }
-                    }
-
-                    if (accumulated >= expectedOutputBytes)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
-
-            if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
-            {
-                throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
-            }
-
-            accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, expectedOutputBytes);
-            metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
-            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
-            LastDecodeMetrics = metrics;
-
-            var outBuf = accumulator.AssembleOutput(expectedOutputBytes);
-            await File.WriteAllBytesAsync(outputFile, outBuf);
+            var orchestrator = new DecodeStreamOrchestrator(width, height, macroblockSize);
+            var output = await orchestrator.ProcessAsync(rgbStream, expectedOutputBytes);
+            LastDecodeMetrics = orchestrator.LastDecodeMetrics;
+            await File.WriteAllBytesAsync(outputFile, output);
         }
 
         public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, string outputFile)
         {
-            if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
-            if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
-
-            int payloadBytesPerFrame = GetPayloadBytesPerFrame(width, height, macroblockSize, HeaderBytes);
-            if (payloadBytesPerFrame <= 0)
-                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
-
-            int rowBytes = width * 3;
-            int frameBytes = rowBytes * height;
-            int blocksX = width / macroblockSize;
-            int blocksY = height / macroblockSize;
-            int bitsPerFrame = blocksX * blocksY;
-
-            var accumulator = new DecodedFrameAccumulator();
-            const int repeatedFrameCount = 3;
-            byte[] frameBuf = new byte[frameBytes];
-            var duplicateTracker = new DuplicateFrameRunTracker();
-            var metrics = new DecodeMetrics();
-
-            byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
-            {
-                var packet = new byte[bitsPerFrame / 8];
-                var strategy = FrameBitDecoderFactory.CreateForModulator(new BinaryGridModulator());
-                strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet);
-                return packet;
-            }
-
-            bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
-            {
-                return accumulator.TryAddDecodedFrame(frame, width, height, macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame);
-            }
-
-            while (true)
-            {
-                int read = 0;
-                while (read < frameBytes)
-                {
-                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
-                    if (r == 0) break;
-                    read += r;
-                }
-
-                if (read < frameBytes) break;
-
-                metrics.TotalFramesSeen++;
-
-                if (!TryReadDecodedPacket(frameBuf, width, height, macroblockSize, rowBytes, frameBytes, bitsPerFrame, out var packet))
-                {
-                    metrics.InvalidPacketCount++;
-                    continue;
-                }
-
-                var currentLogicalSignature = CreateLogicalSignature(frameBuf);
-                int currentQuality = GetPacketQualityScore(packet);
-
-                var completedFrame = duplicateTracker.Update(frameBuf, currentLogicalSignature, currentQuality);
-                if (completedFrame is not null)
-                {
-                    metrics.DuplicateRunCount++;
-                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completedFrame.BestQuality);
-                    duplicateTracker.Flush(completedFrame, repeatedFrameCount, frame => DecodePayloadFrame(frame));
-                }
-            }
-
-            duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
-
-            if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
-            {
-                throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
-            }
-
-            int expectedLength = 0;
-            foreach (var payload in accumulator.OrderedPayload.Values)
-            {
-                expectedLength += payload.Length;
-            }
-
-            accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, expectedLength);
-            metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
-            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
-            LastDecodeMetrics = metrics;
-
-            var outBuf = accumulator.AssembleOutput(expectedLength);
-            await File.WriteAllBytesAsync(outputFile, outBuf);
+            var orchestrator = new DecodeStreamOrchestrator(width, height, macroblockSize);
+            var output = await orchestrator.ProcessAsync(rgbStream, 0);
+            LastDecodeMetrics = orchestrator.LastDecodeMetrics;
+            await File.WriteAllBytesAsync(outputFile, output);
         }
     }
 }

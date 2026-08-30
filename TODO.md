@@ -344,8 +344,9 @@ REFACTOR-010 — Consolidate shared protocol helpers out of the engine types and
 
 REFACTOR-008 — Extract the decode stream loop into a dedicated pipeline orchestrator
 
-- Status: not-started
-- Notes: Move the RGB stream reading loop, per-frame validation, duplicate-run handling, and final assembly decisions out of `DecoderEngine` into a dedicated orchestrator that coordinates the packet codec, duplicate tracker, and accumulator.
+- Status: completed
+- Done: 2026-08-30
+- Notes: `DecodeStreamOrchestrator` owns the RGB stream read loop, validation, duplicate-run handling, and final assembly decisions; `DecoderEngine` now delegates to it while preserving the real H.264 compatibility contract.
 - Acceptance criteria:
   - `DecoderEngine` becomes a thin coordinator with no direct stream-loop recovery details.
   - Duplicate-run selection and flush behavior are ordered explicitly in one place.
@@ -362,8 +363,9 @@ REFACTOR-009 — Separate recovery policy from payload assembly and duplicate se
 
 FEAT-041 — Add a codec-and-stream regression set focused on the decode orchestration boundary
 
-- Status: not-started
-- Notes: Extend the unit coverage to test the stream loop as a contract boundary, including duplicate-run flush behavior, parity recovery edge cases, and invalid-frame handling before output assembly.
+- Status: completed
+- Done: 2026-08-30
+- Notes: The decoder suite now includes dedicated packet-compatibility, recovery, and orchestrator tests covering duplicate-run flush behavior, parity recovery edge cases, and invalid-frame handling before output assembly.
 - Acceptance criteria:
   - There is direct coverage for stream-loop edge cases without opaque end-to-end dependencies.
   - Thresholds for invalid packet ratios and recovered groups remain measurable.
