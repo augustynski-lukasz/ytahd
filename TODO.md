@@ -275,8 +275,9 @@ BUG-005 — Add a real-loss regression for Phase 1 H.264 decode under lossy dupl
 
 FEAT-038 — Split the decoder into quality scoring, duplicate-run selection, and recovery stages with dedicated unit coverage
 
-- Status: not-started
-- Notes: isolate packet validation, duplicate-run winner selection, and parity recovery into smaller testable units so the quality model can evolve without breaking the contract
+- Status: completed
+- Done: 2026-08-30
+- Notes: packet validation and quality scoring are extracted, duplicate-run selection is isolated in `DuplicateFrameRunTracker`, and the accumulator owns recovery/assembly responsibilities.
 
 FEAT-039 — Add explicit decode metrics and thresholds for invalid packets, recovered groups, and duplicate-run quality
 
@@ -303,8 +304,9 @@ REFACTOR-004 — Extract frame-layout calculation into a dedicated helper class
 
 REFACTOR-005 — Extract packet quality scoring and validity checks into a dedicated scorer
 
-- Status: not-started
-- Notes: Split `DecoderEngine.GetPacketQualityScore` and packet-validation predicates into a `PacketQualityScorer`/validator that can be unit-tested independently from stream orchestration.
+- Status: completed
+- Done: 2026-08-30
+- Notes: the decoder now delegates packet quality scoring and validity checks to `PacketQualityScorer`, and direct unit tests cover invalid headers and stronger-vs-weaker frame scoring.
 - Acceptance criteria:
   - All packet quality thresholds are centralized in one class.
   - Invalid packet, duplicate-run, and lossy-frame scoring rules can be tested without real FFmpeg.

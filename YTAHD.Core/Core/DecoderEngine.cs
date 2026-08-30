@@ -56,45 +56,7 @@ namespace YTAHD.Core.Core
 
         public static int GetPacketQualityScore(ReadOnlySpan<byte> packet)
         {
-            if (packet.Length < HeaderBytes)
-            {
-                return 0;
-            }
-
-            if (!TryParseFramePacket(packet.ToArray(), out var frameType, out _, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
-            {
-                return 0;
-            }
-
-            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - HeaderBytes)
-            {
-                return 0;
-            }
-
-            int score = 1000;
-            score += payloadLength * 8;
-            score += frameType == FrameTypeParity ? 32 : 64;
-            score += Math.Max(0, declaredTotalFrames) * 2;
-
-            int nonZeroCount = 0;
-            int bitTransitionCount = 0;
-            for (int i = 0; i < payload.Length; i++)
-            {
-                byte value = payload[i];
-                if (value != 0)
-                {
-                    nonZeroCount++;
-                }
-
-                if (i > 0 && payload[i - 1] != value)
-                {
-                    bitTransitionCount += 1;
-                }
-            }
-
-            score += nonZeroCount * 6;
-            score += bitTransitionCount * 2;
-            return score;
+            return PacketQualityScorer.Score(packet);
         }
 
         private static int GetDuplicateFrameCount(int lastRunLength, int repeatedFrameCount)
@@ -148,7 +110,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            return TryParseFramePacket(packet, out _, out _, out _, out _, out _, out _, out _);
+            return PacketQualityScorer.IsFramePacketValid(packet);
         }
 
         public async Task VerifyAsync()
