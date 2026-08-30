@@ -216,6 +216,11 @@ BUG-002 — Make the Phase 1 decoder tolerant of lossy compressed video instead 
 - Status: completed
 - Done: 2026-08-30 (updated `DecoderEngine` to use threshold-based sampling, accept lossy bit drift, and validate logical payload signatures instead of exact raw pixel equality)
 
+BUG-003 — Finalize the real FFmpeg-based Phase 1 pipeline for lossy encode/decode integration
+
+- Status: completed
+- Done: 2026-08-30 (updated the CLI/FFmpeg wiring, service options, and regression tests so the real encode/decode flow uses the correct FFmpeg path, timeout behavior, and lossy decoder semantics)
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

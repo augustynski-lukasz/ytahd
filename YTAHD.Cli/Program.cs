@@ -31,17 +31,19 @@ var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output vi
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
 var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', or 'phase3'");
+var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
 encodeCommand.AddOption(optFps);
 encodeCommand.AddOption(optModulator);
+encodeCommand.AddOption(optFfmpegPath);
 
-encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockSize, int width, int height, int fps, string modulatorName) =>
+encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockSize, int width, int height, int fps, string modulatorName, string? ffmpegPath) =>
 {
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}] ");
-    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory());
+    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}] ");
+    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     await service.EncodeAsync(new EncodeOptions
     {
         InputFile = input.FullName,
@@ -52,7 +54,7 @@ encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockS
         Fps = fps,
         VerifyFfmpeg = true
     });
-}, argIn, argOut, optMacro, optWidth, optHeight, optFps, optModulator);
+}, argIn, argOut, optMacro, optWidth, optHeight, optFps, optModulator, optFfmpegPath);
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
 var decodeOut = new Argument<FileInfo>("output") { Arity = ArgumentArity.ExactlyOne };
@@ -60,19 +62,21 @@ var decodeCommand = new Command("decode", "Decode a video back into a binary fil
 decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
 var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', or 'phase3'");
+var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
 decodeCommand.AddOption(decodeModulator);
-decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName) =>
+decodeCommand.AddOption(decodeFfmpegPath);
+decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName, string? ffmpegPath) =>
 {
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}]");
-    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory());
+    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}]");
+    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     await service.DecodeAsync(new DecodeOptions
     {
         InputVideo = input.FullName,
         OutputFile = output.FullName,
         VerifyFfmpeg = true
     });
-}, decodeIn, decodeOut, decodeModulator);
+}, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath);
 
 root.AddCommand(encodeCommand);
 root.AddCommand(decodeCommand);

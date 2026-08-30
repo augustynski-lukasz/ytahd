@@ -3,12 +3,24 @@ using System.IO;
 using System.Threading.Tasks;
 using Xunit;
 using YTAHD.Core.Application;
+using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
 namespace YTAHD.Tests
 {
     public class YtahdCodecServiceTests
     {
+        [Fact]
+        public async Task FFmpegWrapper_UsesExplicitExecutablePath_WhenProvided()
+        {
+            var ffmpegPath = "D:\\!Tools\\ffmpeg-20151019\\bin\\ffmpeg.exe";
+            var wrapper = new FFmpegWrapper(ffmpegExecutablePath: ffmpegPath);
+
+            var isAvailable = await wrapper.IsAvailableAsync();
+
+            Assert.True(isAvailable);
+        }
+
         [Fact]
         public async Task EncodeAsync_WritesData_UsingServiceApi()
         {

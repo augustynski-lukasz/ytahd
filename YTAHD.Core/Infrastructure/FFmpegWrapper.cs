@@ -15,19 +15,23 @@ namespace YTAHD.Core.Infrastructure
         private readonly int _width;
         private readonly int _height;
         private readonly int _fps;
+        private readonly string _ffmpegExecutablePath;
 
-        public FFmpegWrapper(int width = 3840, int height = 2160, int fps = 60)
+        public FFmpegWrapper(int width = 3840, int height = 2160, int fps = 60, string? ffmpegExecutablePath = null)
         {
             _width = width;
             _height = height;
             _fps = fps;
+            _ffmpegExecutablePath = string.IsNullOrWhiteSpace(ffmpegExecutablePath) ? "ffmpeg" : ffmpegExecutablePath;
         }
+
+        public string ExecutablePath => _ffmpegExecutablePath;
 
         public async Task<bool> IsAvailableAsync()
         {
             try
             {
-                var psi = new ProcessStartInfo("ffmpeg", "-version")
+                var psi = new ProcessStartInfo(_ffmpegExecutablePath, "-version")
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
@@ -48,10 +52,19 @@ namespace YTAHD.Core.Infrastructure
 
         public async Task<IFFmpegProcess> StartAsync(string outputPath)
         {
-            // Example ffmpeg args for rawvideo input; callers should adapt pixel format/resolution.
-            var args = $"-f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v libx264 -pix_fmt yuv420p \"{outputPath}\"";
+            if (string.IsNullOrWhiteSpace(outputPath))
+                throw new ArgumentException("Output path is required.", nameof(outputPath));
 
-            var psi = new ProcessStartInfo("ffmpeg", args)
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            // Use a lossless codec here: libx264 introduces lossy quantization and will corrupt the 
+            // binary modulation payload before the custom decoder can recover it.
+            var args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v ffv1 -an \"{outputPath}\"";
+
+            var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)
             {
                 UseShellExecute = false,
                 RedirectStandardInput = true,

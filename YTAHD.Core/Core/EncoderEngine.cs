@@ -150,33 +150,50 @@ namespace YTAHD.Core.Core
                 }
             }
 
-            for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
+            try
             {
-                int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
-                var parityPayload = new byte[payloadBytesPerFrame];
-
-                for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
+                for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
                 {
-                    int frameIdx = groupStart + idxInGroup;
-                    int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
-                    var payload = new byte[payloadBytesPerFrame];
-                    if (payloadLen > 0)
+                    int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
+                    var parityPayload = new byte[payloadBytesPerFrame];
+
+                    for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
                     {
-                        Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
+                        int frameIdx = groupStart + idxInGroup;
+                        int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
+                        var payload = new byte[payloadBytesPerFrame];
+                        if (payloadLen > 0)
+                        {
+                            Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
+                        }
+
+                        for (int i = 0; i < payloadBytesPerFrame; i++)
+                        {
+                            parityPayload[i] ^= payload[i];
+                        }
+
+                        var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
+                        await WriteFramePacketAsync(framePacket);
+                        dataOffset += payloadLen;
                     }
 
-                    for (int i = 0; i < payloadBytesPerFrame; i++)
-                    {
-                        parityPayload[i] ^= payload[i];
-                    }
-
-                    var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
-                    await WriteFramePacketAsync(framePacket);
-                    dataOffset += payloadLen;
+                    var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
+                    await WriteFramePacketAsync(parityPacket);
                 }
+            }
+            finally
+            {
+                try
+                {
+                    await stdin.FlushAsync();
+                }
+                catch { }
 
-                var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
-                await WriteFramePacketAsync(parityPacket);
+                try
+                {
+                    stdin.Dispose();
+                }
+                catch { }
             }
 
             await ff.WaitForExitAsync();

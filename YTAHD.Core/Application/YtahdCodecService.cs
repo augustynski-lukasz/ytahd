@@ -40,7 +40,7 @@ public sealed class YtahdCodecService
         if (string.IsNullOrWhiteSpace(options.OutputFile)) throw new ArgumentException("OutputFile is required.", nameof(options));
 
         var ffmpeg = _ffmpegFactory.CreateForDecode();
-        var engine = new DecoderEngine(_modulator, ffmpeg);
+        var engine = new DecoderEngine(_modulator, ffmpeg, options.MacroblockSize, options.Width, options.Height, options.Fps);
 
         if (options.VerifyFfmpeg)
         {

@@ -11,6 +11,7 @@ namespace YTAHD.Core.Infrastructure
 
     public interface IFFmpegWrapper
     {
+        string ExecutablePath { get; }
         Task<bool> IsAvailableAsync();
         Task<IFFmpegProcess> StartAsync(string outputPath);
     }
