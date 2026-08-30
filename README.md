@@ -52,6 +52,13 @@ The real FFmpeg pipeline is working and the lossy decoder has been hardened to t
 
 A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
 
+## Lessons Learned
+
+- Real H.264 output is lossy by design. A single hard threshold for black-vs-white decoding is not reliable under `libx264`; the decoder must score multiple luminance candidates and accept a range of values instead of assuming perfect binary separation.
+- The actual stream contract is a decoded raw RGB24 frame from FFmpeg, not a raw RGBA buffer. The decoder must honor the real stride and pixel layout (`width * 3` per row for RGB24) rather than the internal in-memory RGBA layout used during render generation.
+- Packet decode success depends on both the bit-decoder logic and the frame geometry assumptions. A fix that only changes thresholding can still fail if the row stride, payload sizing, or packet indexing are inconsistent with the actual decoded frame.
+- End-to-end smoke tests with real FFmpeg remain the authoritative validation path. Synthetic tests are useful for debugging, but only a real codec round-trip proves the protocol still survives the production compression pipeline.
+
 ---
 
 ## ⚠️ The Core Challenge: YouTube Video Compression
