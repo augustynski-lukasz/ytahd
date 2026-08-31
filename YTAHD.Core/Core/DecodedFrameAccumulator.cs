@@ -30,10 +30,11 @@ namespace YTAHD.Core.Core
             IModulator modulator)
         {
             var geometry = new ModulatorGeometry(width, height, macroblockSize, FramePacket.HeaderBytes, BitsPerFrame: bitsPerFrame);
+            int borderWidth = modulator.GetBorderWidth(geometry);
+            geometry = geometry with { BorderWidth = borderWidth };
             int framePacketBytes = modulator.GetPacketBufferLength(geometry, payloadBytesPerFrame);
             var packet = new byte[framePacketBytes];
 
-            int borderWidth = modulator.GetBorderWidth(geometry with { BorderWidth = 0 });
             var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 
@@ -43,7 +44,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            if (!DecoderEngine.TryParseFramePacket(packet, out var frameType, out var frameIndex, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
+            if (!FramePacketCodec.TryDecodeWithTolerance(packet, out var frameType, out var frameIndex, out var declaredTotalFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
             {
                 SawInvalidPacket = true;
                 return false;

@@ -107,11 +107,12 @@ namespace YTAHD.Core.Core
             out byte[] packet)
         {
             var geometry = new ModulatorGeometry(width, height, macroblockSize, HeaderBytes, BitsPerFrame: bitsPerFrame);
+            int borderWidth = modulator.GetBorderWidth(geometry);
+            geometry = geometry with { BorderWidth = borderWidth };
             int payloadBytesPerFrame = modulator.GetPayloadBytesPerFrame(geometry);
             int framePacketBytes = modulator.GetPacketBufferLength(geometry, payloadBytesPerFrame);
             packet = new byte[framePacketBytes];
 
-            int borderWidth = modulator.GetBorderWidth(geometry with { BorderWidth = 0 });
             var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
             strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 
@@ -120,7 +121,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            return FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out _, out _) && PacketQualityScorer.IsFramePacketValid(packet);
+            return FramePacketCodec.TryDecodeWithTolerance(packet, out _, out _, out _, out _, out _, out _, out _) && PacketQualityScorer.IsFramePacketValid(packet);
         }
 
         public async Task VerifyAsync()

@@ -73,6 +73,35 @@ namespace YTAHD.Core.Core
             return true;
         }
 
+        public static bool TryDecodeWithTolerance(ReadOnlySpan<byte> packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
+        {
+            if (TryDecode(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload))
+            {
+                return true;
+            }
+
+            if (packet.Length < FramePacket.HeaderBytes)
+            {
+                return false;
+            }
+
+            int magic0Delta = Math.Abs(packet[0] - 0x59);
+            int magic1Delta = Math.Abs(packet[1] - 0x54);
+            int versionDelta = Math.Abs(packet[2] - FramePacket.FrameVersion);
+            int frameTypeByte = packet[3];
+            if (magic0Delta > 16 || magic1Delta > 16 || versionDelta > 4 || (frameTypeByte != FramePacket.FrameTypeData && frameTypeByte != FramePacket.FrameTypeParity))
+            {
+                return false;
+            }
+
+            var normalized = packet.ToArray();
+            normalized[0] = 0x59;
+            normalized[1] = 0x54;
+            normalized[2] = FramePacket.FrameVersion;
+
+            return TryDecode(normalized, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
+        }
+
         public static void WriteFrameHeader(byte[] framePacket, byte frameType, int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength)
         {
             if (framePacket == null)

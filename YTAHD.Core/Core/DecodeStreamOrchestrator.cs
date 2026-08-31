@@ -34,6 +34,8 @@ namespace YTAHD.Core.Core
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
 
             var geometry = new ModulatorGeometry(_width, _height, _macroblockSize, FramePacket.HeaderBytes, BitsPerFrame: 0);
+            int borderWidth = _modulator.GetBorderWidth(geometry);
+            geometry = geometry with { BorderWidth = borderWidth };
             int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(geometry);
             if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
@@ -56,7 +58,6 @@ namespace YTAHD.Core.Core
             {
                 var packet = new byte[packetByteLength];
                 var strategy = FrameBitDecoderFactory.CreateForModulator(_modulator);
-                int borderWidth = _modulator.GetBorderWidth(packetGeometry with { BorderWidth = 0 });
                 strategy.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
                 return packet;
             }

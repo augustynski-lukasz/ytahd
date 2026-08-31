@@ -218,6 +218,24 @@ CHORE-008 — Ignore generated temporary test files and artifacts
 - Status: completed
 - Done: 2026-08-30
 
+BUG-002 — Fix premature decode stop when the leading frame is missing
+
+- Status: completed
+- Done: 2026-08-31
+- Notes: `DecodeRecoveryPolicy` and the accumulator now avoid terminating early when frame 0 is absent but later payload data is still recoverable.
+
+FEAT-035 — Add real FFmpeg validation for the working Phase 1 and Phase 2 paths
+
+- Status: completed
+- Done: 2026-08-31
+- Notes: real CLI and service-level encode/decode checks were added and validated against actual ffmpeg output for Phase 1 and Phase 2.
+
+CHORE-009 — Record the Phase 3 investigation findings and clean scratch probe artifacts
+
+- Status: completed
+- Done: 2026-08-31
+- Notes: the Phase 3 investigation was captured in `PROBLEM.md`, and the temporary probe directories created during the debug pass were removed from the workspace.
+
 BUG-002 — Harden the lossy H.264 decoder against drift, duplicate frames, and weak payloads
 
 - Status: completed

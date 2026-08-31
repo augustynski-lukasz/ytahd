@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using YTAHD.Core.Modulation;
 
 namespace YTAHD.Core.Core
@@ -271,6 +272,178 @@ namespace YTAHD.Core.Core
         public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
         {
             packet.Clear();
+
+            const int blockSize = 8;
+            const int lowFrequencySize = 4;
+            bool isRgba = frame.Length == width * height * 4;
+            int bytesPerPixel = isRgba ? 4 : 3;
+            int effectiveRowBytes = isRgba ? width * 4 : rowBytes;
+
+            int blocksX = Math.Max(1, (width - (borderWidth * 2)) / blockSize);
+            int blocksY = Math.Max(1, (height - (borderWidth * 2)) / blockSize);
+
+            var candidateStreams = new List<List<byte>>
+            {
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>(),
+                new List<byte>()
+            };
+
+            for (int blockY = 0; blockY < blocksY; blockY++)
+            {
+                for (int blockX = 0; blockX < blocksX; blockX++)
+                {
+                    int baseX = borderWidth + (blockX * blockSize);
+                    int baseY = borderWidth + (blockY * blockSize);
+                    for (int py = 0; py < lowFrequencySize; py++)
+                    {
+                        for (int px = 0; px < lowFrequencySize; px++)
+                        {
+                            int x = baseX + px;
+                            int y = baseY + py;
+                            if (x < 0 || y < 0 || x >= width || y >= height)
+                            {
+                                continue;
+                            }
+
+                            int idx = (y * effectiveRowBytes) + (x * bytesPerPixel);
+                            if (idx + 2 >= frameBytes)
+                            {
+                                continue;
+                            }
+
+                            byte r = frame[idx];
+                            byte g = frame[idx + 1];
+                            byte b = frame[idx + 2];
+                            int luminance = (int)Math.Round(0.299d * r + 0.587d * g + 0.114d * b);
+                            int average = (r + g + b) / 3;
+                            int diffRG = (int)r - g;
+                            int diffGB = (int)g - b;
+                            int diffBR = (int)b - r;
+
+                            candidateStreams[0].Add(r);
+                            candidateStreams[1].Add(g);
+                            candidateStreams[2].Add(b);
+                            candidateStreams[3].Add((byte)Math.Clamp(average, 0, 255));
+                            candidateStreams[4].Add((byte)Math.Clamp(luminance, 0, 255));
+                            candidateStreams[5].Add((byte)Math.Clamp(diffRG + 128, 0, 255));
+                            candidateStreams[6].Add((byte)Math.Clamp(diffGB + 128, 0, 255));
+                            candidateStreams[7].Add((byte)Math.Clamp(diffBR + 128, 0, 255));
+                            candidateStreams[8].Add((byte)Math.Clamp((r + g + b) / 3 + (luminance - average), 0, 255));
+                        }
+                    }
+                }
+            }
+
+            static bool HasPacketHeader(ReadOnlySpan<byte> sample)
+            {
+                if (sample.Length < FramePacket.HeaderBytes)
+                {
+                    return false;
+                }
+
+                bool magicClose = Math.Abs(sample[0] - 0x59) <= 16 && Math.Abs(sample[1] - 0x54) <= 16;
+                bool versionClose = Math.Abs(sample[2] - FramePacket.FrameVersion) <= 4;
+                bool typeValid = sample[3] == FramePacket.FrameTypeData || sample[3] == FramePacket.FrameTypeParity;
+                return magicClose && versionClose && typeValid;
+            }
+
+            byte[] bestCandidate = new byte[packet.Length];
+            int bestScore = int.MinValue;
+            bool hasValidHeaderCandidate = false;
+
+            foreach (var rawSamples in candidateStreams)
+            {
+                if (rawSamples.Count == 0)
+                {
+                    continue;
+                }
+
+                int maxCandidateBytes = Math.Min(rawSamples.Count, packet.Length);
+                int maxStartOffset = Math.Max(0, rawSamples.Count - FramePacket.HeaderBytes);
+                for (int startOffset = 0; startOffset <= maxStartOffset; startOffset++)
+                {
+                    for (int delta = -128; delta <= 128; delta += 2)
+                    {
+                        int sampleLength = Math.Min(maxCandidateBytes, rawSamples.Count - startOffset);
+                        if (sampleLength < FramePacket.HeaderBytes)
+                        {
+                            continue;
+                        }
+
+                        var headerCandidate = new byte[FramePacket.HeaderBytes];
+                        for (int i = 0; i < headerCandidate.Length; i++)
+                        {
+                            int adjusted = rawSamples[startOffset + i] - delta;
+                            headerCandidate[i] = (byte)Math.Clamp(adjusted, 0, 255);
+                        }
+
+                        if (!HasPacketHeader(headerCandidate))
+                        {
+                            continue;
+                        }
+
+                        int payloadLength = ((headerCandidate[17] << 8) | headerCandidate[18]);
+                        int declaredLength = FramePacket.HeaderBytes + payloadLength;
+                        int candidateLength = Math.Min(maxCandidateBytes, Math.Max(declaredLength, FramePacket.HeaderBytes));
+                        if (startOffset + candidateLength > rawSamples.Count)
+                        {
+                            candidateLength = rawSamples.Count - startOffset;
+                        }
+
+                        if (candidateLength < FramePacket.HeaderBytes)
+                        {
+                            continue;
+                        }
+
+                        var candidate = new byte[candidateLength];
+                        for (int i = 0; i < candidate.Length; i++)
+                        {
+                            int adjusted = rawSamples[startOffset + i] - delta;
+                            candidate[i] = (byte)Math.Clamp(adjusted, 0, 255);
+                        }
+
+                        bool isAlignedStart = startOffset == 0;
+                        if (FramePacketCodec.TryDecode(candidate, out _, out _, out _, out _, out _, out _, out _))
+                        {
+                            if (isAlignedStart || candidate[0] == 0x59 && candidate[1] == 0x54)
+                            {
+                                candidate.AsSpan().CopyTo(packet);
+                                return;
+                            }
+                        }
+
+                        bool hasHeader = HasPacketHeader(candidate);
+                        int score = PacketQualityScorer.Score(candidate) + (Math.Abs(delta) < 8 ? 128 : 0) + (isAlignedStart ? 256 : 0) + (startOffset <= 4 ? 32 : 0);
+                        if (hasHeader && score > bestScore)
+                        {
+                            bestScore = score;
+                            hasValidHeaderCandidate = true;
+                            candidate.AsSpan().CopyTo(bestCandidate);
+                        }
+                    }
+                }
+            }
+
+            if (hasValidHeaderCandidate)
+            {
+                bestCandidate.AsSpan().CopyTo(packet);
+                return;
+            }
+
+            var fallback = new byte[packet.Length];
+            int fallbackLength = Math.Min(candidateStreams[0].Count, packet.Length);
+            for (int i = 0; i < fallbackLength; i++)
+            {
+                fallback[i] = candidateStreams[0][i];
+            }
+            fallback.AsSpan().CopyTo(packet);
         }
     }
 }

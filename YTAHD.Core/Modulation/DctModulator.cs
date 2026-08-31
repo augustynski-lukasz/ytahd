@@ -153,16 +153,42 @@ namespace YTAHD.Core.Modulation
                     }
 
                     var payloadSlice = payload.Slice(payloadIndex, Math.Min(payload.Length - payloadIndex, Cutoff * Cutoff));
-                    for (int i = 0; i < payloadSlice.Length; i++)
+                    for (int yy = 0; yy < blockSize; yy++)
                     {
-                        int py = i / Cutoff;
-                        int px = i % Cutoff;
-                        int idx = ((y + py) * width + (x + px)) * 4;
-                        byte value = payloadSlice[i];
-                        frame[idx + 0] = value;
-                        frame[idx + 1] = value;
-                        frame[idx + 2] = value;
-                        frame[idx + 3] = 255;
+                        for (int xx = 0; xx < blockSize; xx++)
+                        {
+                            int idx = ((y + yy) * width + (x + xx)) * 4;
+                            double distanceFromCarrier = double.MaxValue;
+                            if (yy < Cutoff && xx < Cutoff)
+                            {
+                                distanceFromCarrier = 0.0d;
+                            }
+                            else
+                            {
+                                int centerX = Cutoff / 2;
+                                int centerY = Cutoff / 2;
+                                distanceFromCarrier = Math.Sqrt((xx - centerX) * (xx - centerX) + (yy - centerY) * (yy - centerY));
+                            }
+
+                            byte neutral = 0;
+                            if (yy < Cutoff && xx < Cutoff)
+                            {
+                                int payloadIndexInBlock = (yy * Cutoff) + xx;
+                                if (payloadIndexInBlock < payloadSlice.Length)
+                                {
+                                    neutral = payloadSlice[payloadIndexInBlock];
+                                }
+                                else
+                                {
+                                    neutral = 0;
+                                }
+                            }
+
+                            frame[idx + 0] = neutral;
+                            frame[idx + 1] = neutral;
+                            frame[idx + 2] = neutral;
+                            frame[idx + 3] = 255;
+                        }
                     }
 
                     payloadIndex += payloadSlice.Length;
@@ -184,6 +210,7 @@ namespace YTAHD.Core.Modulation
             var basis = DctCarrierBasis.GenerateBasis(BasisSize, Cutoff);
             int payloadCount = Math.Min(output.Length, Cutoff * Cutoff);
 
+            var values = new double[payloadCount];
             int validCount = 0;
             double minValue = double.MaxValue;
             double maxValue = double.MinValue;
@@ -198,6 +225,7 @@ namespace YTAHD.Core.Modulation
                 }
 
                 double sample = pixelBuffer[y * BasisSize + x];
+                values[i] = sample;
                 if (sample < minValue) minValue = sample;
                 if (sample > maxValue) maxValue = sample;
                 validCount++;
@@ -219,13 +247,10 @@ namespace YTAHD.Core.Modulation
                         continue;
                     }
 
-                    output[i] = pixelBuffer[y * BasisSize + x];
+                    output[i] = (byte)Math.Clamp(Math.Round(values[i]), 0, 255);
                 }
                 return;
             }
-
-            double slope = 255d / (maxValue - minValue);
-            double intercept = -minValue * slope;
 
             for (int i = 0; i < payloadCount; i++)
             {
@@ -236,8 +261,7 @@ namespace YTAHD.Core.Modulation
                     continue;
                 }
 
-                double sample = pixelBuffer[y * BasisSize + x];
-                double normalized = sample * slope + intercept;
+                double normalized = ((values[i] - minValue) / (maxValue - minValue)) * 255d;
                 output[i] = (byte)Math.Clamp(Math.Round(normalized), 0, 255);
             }
         }

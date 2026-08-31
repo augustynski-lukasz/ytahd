@@ -144,5 +144,127 @@ namespace YTAHD.Tests
             Assert.Equal(payload[15], frame[((borderWidth + 3) * width + (borderWidth + 3)) * 4 + 0]);
             Assert.Equal(0, frame[((borderWidth + 6) * width + (borderWidth + 6)) * 4 + 0]);
         }
+
+        [Fact]
+        public void DctFrameBitDecoder_Recovers_Packet_From_Encoded_Frame()
+        {
+            var payload = new byte[96];
+            for (int i = 0; i < payload.Length; i++)
+            {
+                payload[i] = (byte)((i * 17) % 251);
+            }
+
+            var packetBytes = FrameProtocolHelpers.CreateDataFramePacket(0, 1, 0, 1, payload.Length, payload, payload.Length);
+            var frame = DctModulator.CreatePhase3Frame(640, 480, borderWidth: 32, packetBytes);
+            var rgb = FrameProtocolHelpers.ConvertRgbaToRgb(frame, 640, 480);
+
+            var decodedPacket = new byte[FramePacket.HeaderBytes + payload.Length];
+            var decoder = new DctFrameBitDecoder();
+            decoder.Decode(rgb, 640, 480, 16, 640 * 3, 640 * 480 * 3, decodedPacket, borderWidth: 32);
+
+            Assert.True(FramePacketCodec.TryDecode(decodedPacket, out var frameType, out var frameIndex, out var totalFrames, out var groupStart, out var groupCount, out var payloadLength, out var decodedPayload));
+            Assert.Equal(FramePacket.FrameTypeData, frameType);
+            Assert.Equal(0, frameIndex);
+            Assert.Equal(1, totalFrames);
+            Assert.Equal(0, groupStart);
+            Assert.Equal(1, groupCount);
+            Assert.Equal(payload.Length, payloadLength);
+            Assert.Equal(payload, decodedPayload);
+        }
+
+        [Fact]
+        public void DctFrameBitDecoder_Recovers_Packet_After_Luminance_Drift()
+        {
+            var payload = new byte[96];
+            for (int i = 0; i < payload.Length; i++)
+            {
+                payload[i] = (byte)((i * 29) % 251);
+            }
+
+            var packetBytes = FrameProtocolHelpers.CreateDataFramePacket(0, 1, 0, 1, payload.Length, payload, payload.Length);
+            var frame = DctModulator.CreatePhase3Frame(640, 480, borderWidth: 32, packetBytes);
+            var rgb = FrameProtocolHelpers.ConvertRgbaToRgb(frame, 640, 480);
+
+            var drifted = new byte[rgb.Length];
+            for (int i = 0; i < rgb.Length; i++)
+            {
+                drifted[i] = (byte)Math.Clamp(rgb[i] + 12, 0, 255);
+            }
+
+            var decodedPacket = new byte[FramePacket.HeaderBytes + payload.Length];
+            var decoder = new DctFrameBitDecoder();
+            decoder.Decode(drifted, 640, 480, 16, 640 * 3, 640 * 480 * 3, decodedPacket, borderWidth: 32);
+
+            Assert.True(FramePacketCodec.TryDecode(decodedPacket, out _, out _, out _, out _, out _, out _, out _), "DCT decoder should recover the packet header despite luminance drift.");
+            Assert.True(PacketQualityScorer.IsFramePacketValid(decodedPacket), "DCT decoder should produce a valid packet quality score after luminance drift.");
+        }
+
+        [Fact]
+        public void DctFrameBitDecoder_Recovers_Packet_After_RGB_Channel_Drift()
+        {
+            var payload = new byte[96];
+            for (int i = 0; i < payload.Length; i++)
+            {
+                payload[i] = (byte)((i * 11 + 37) % 251);
+            }
+
+            var packetBytes = FrameProtocolHelpers.CreateDataFramePacket(0, 1, 0, 1, payload.Length, payload, payload.Length);
+            var frame = DctModulator.CreatePhase3Frame(640, 480, borderWidth: 32, packetBytes);
+            var rgb = FrameProtocolHelpers.ConvertRgbaToRgb(frame, 640, 480);
+
+            var drifted = new byte[rgb.Length];
+            for (int i = 0; i < rgb.Length; i += 3)
+            {
+                drifted[i] = (byte)Math.Clamp(rgb[i] + 18, 0, 255);
+                drifted[i + 1] = (byte)Math.Clamp(rgb[i + 1] - 8, 0, 255);
+                drifted[i + 2] = (byte)Math.Clamp(rgb[i + 2] + 12, 0, 255);
+            }
+
+            var decodedPacket = new byte[FramePacket.HeaderBytes + payload.Length];
+            var decoder = new DctFrameBitDecoder();
+            decoder.Decode(drifted, 640, 480, 16, 640 * 3, 640 * 480 * 3, decodedPacket, borderWidth: 32);
+
+            Assert.True(FramePacketCodec.TryDecode(decodedPacket, out _, out _, out _, out _, out _, out _, out _), "DCT decoder should recover from channel imbalance seen in lossy H.264 decode.");
+            Assert.True(PacketQualityScorer.IsFramePacketValid(decodedPacket), "DCT decoder should still produce a valid frame packet under uneven RGB drift.");
+        }
+
+        [Fact]
+        public void DecodeRecoveryPolicy_DoesNotStop_When_Leading_Frame_Is_Missing()
+        {
+            var payload = new byte[96];
+            for (int i = 0; i < payload.Length; i++)
+            {
+                payload[i] = (byte)((i * 19 + 7) % 251);
+            }
+
+            var packetBytes = FrameProtocolHelpers.CreateDataFramePacket(1, 2, 0, 2, payload.Length, payload, payload.Length);
+            var frame = DctModulator.CreatePhase3Frame(640, 480, borderWidth: 32, packetBytes);
+            var rgb = FrameProtocolHelpers.ConvertRgbaToRgb(frame, 640, 480);
+
+            var accumulator = new DecodedFrameAccumulator();
+            var geometry = new ModulatorGeometry(640, 480, 16, FramePacket.HeaderBytes, BitsPerFrame: 0);
+            geometry = geometry with { BorderWidth = 32 };
+            int payloadBytesPerFrame = new DctModulator().GetPayloadBytesPerFrame(geometry);
+            int rowBytes = 640 * 3;
+            int frameBytes = rowBytes * 480;
+
+            Assert.True(accumulator.TryAddDecodedFrame(rgb, 640, 480, 16, rowBytes, frameBytes, payloadBytesPerFrame, 0, new DctModulator()));
+            Assert.False(DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, 64), "Decode should not stop when the required leading frame 0 is not present yet.");
+        }
+
+        [Fact]
+        public void DctModulator_Uses_BorderWidth_When_Calculating_Frame_Capacity()
+        {
+            var modulator = new DctModulator();
+            var geometry = new ModulatorGeometry(640, 480, 16, FramePacket.HeaderBytes, BorderWidth: 0, BitsPerFrame: 0);
+
+            var borderAware = geometry with { BorderWidth = modulator.GetBorderWidth(geometry) };
+            var payloadBytes = modulator.GetPayloadBytesPerFrame(borderAware);
+            var packetLength = modulator.GetPacketBufferLength(borderAware, payloadBytes);
+
+            Assert.Equal(32, borderAware.BorderWidth);
+            Assert.True(packetLength > 0);
+            Assert.Equal(72 * 52 * 16, payloadBytes + FramePacket.HeaderBytes);
+        }
     }
 }

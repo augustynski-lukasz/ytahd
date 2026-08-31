@@ -15,9 +15,17 @@ namespace YTAHD.Core.Core
             }
 
             int total = 0;
-            foreach (var payload in accumulator.OrderedPayload.Values)
+            int nextExpectedFrameIndex = 0;
+
+            foreach (var kvp in accumulator.OrderedPayload)
             {
-                total += payload.Length;
+                if (kvp.Key != nextExpectedFrameIndex)
+                {
+                    break;
+                }
+
+                total += kvp.Value.Length;
+                nextExpectedFrameIndex++;
                 if (total >= expectedOutputBytes)
                 {
                     return true;
