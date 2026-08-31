@@ -11,10 +11,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTAHD.Tests", "YTAHD.Tests\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YTAHD.Perf", "YTAHD.Perf\YTAHD.Perf.csproj", "{EC92ABF5-5D92-408C-97E8-8D55B835E3AF}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".phase3probe", ".phase3probe", "{E2ADCB10-4159-8AEB-1439-C5B0C9EA62A6}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "phase3probe", ".phase3probe\phase3probe.csproj", "{8A6485F7-1058-4354-9394-61E302179722}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -73,23 +69,8 @@ Global
 		{EC92ABF5-5D92-408C-97E8-8D55B835E3AF}.Release|x64.Build.0 = Release|Any CPU
 		{EC92ABF5-5D92-408C-97E8-8D55B835E3AF}.Release|x86.ActiveCfg = Release|Any CPU
 		{EC92ABF5-5D92-408C-97E8-8D55B835E3AF}.Release|x86.Build.0 = Release|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Debug|x64.Build.0 = Debug|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Debug|x86.Build.0 = Debug|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Release|Any CPU.Build.0 = Release|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Release|x64.ActiveCfg = Release|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Release|x64.Build.0 = Release|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Release|x86.ActiveCfg = Release|Any CPU
-		{8A6485F7-1058-4354-9394-61E302179722}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
-		{8A6485F7-1058-4354-9394-61E302179722} = {E2ADCB10-4159-8AEB-1439-C5B0C9EA62A6}
 	EndGlobalSection
 EndGlobal
