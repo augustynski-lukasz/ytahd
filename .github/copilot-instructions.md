@@ -68,3 +68,83 @@ dotnet run --project YTAHD.Cli -- decode out.mp4 recovered.bin --modulator phase
 - Be explicit about assumptions and validation evidence.
 - Write clear, minimal code comments only when they capture a non-obvious protocol reason.
 - Keep project documentation and TODO status aligned with the actual code state.
+
+### Markdown file naming
+
+| Type                                            | Case          | Examples                                        |
+| ----------------------------------------------- | ------------- | ----------------------------------------------- |
+| Well-known standalone docs (root or `docs/`)    | **UPPERCASE** | `README.md`, `PLAN.md`, `BACKLOG.md`            |
+| ADR / decision slugs (`docs/decisions/`)        | lowercase     | `F-20260423-01-design-system.md`                |
+| Tool-prescribed files (names fixed by the tool) | lowercase     | `.github/copilot-instructions.md`, `*.agent.md` |
+
+Rule: if a Markdown file is a standalone document you would direct someone to, it is UPPERCASE. If it is a slug or tool-managed file, it stays lowercase.
+
+---
+
+## ADR — mandatory for every non-trivial change
+
+All history, decisions, and open items live in:
+
+```
+docs/
+  BACKLOG.md          ← open items only (features not yet done, tech debt)
+  decisions/          ← one ADR file per resolved item or significant change
+```
+
+### When to create an ADR
+
+**Always create an ADR file alongside your commit** for:
+
+- Any phase or feature implementation (`F-YYYYMMDD-NN`)
+- Any technical debt resolution (`TD-YYYYMMDD-NN`)
+- Any non-trivial fix, refactor, or architectural decision (`CR-YYYYMMDD-NN`)
+
+Trivial changes (typo fixes, copy changes, version bumps) do not need an ADR.
+
+### ADR file naming
+
+All ADRs follow the same date + ordinal pattern:
+
+| Source         | Filename pattern               | Example                                   |
+| -------------- | ------------------------------ | ----------------------------------------- |
+| Feature        | `F-{YYYYMMDD}-{NN}-{slug}.md`  | `F-20260423-01-design-system.md`          |
+| Technical debt | `TD-{YYYYMMDD}-{NN}-{slug}.md` | `TD-20260501-01-upgrade-node-20.md`       |
+| Change request | `CR-{YYYYMMDD}-{NN}-{slug}.md` | `CR-20260501-01-tailwind-v4-migration.md` |
+
+All files go in `docs/decisions/`. Slug = lowercase-hyphenated short title.
+
+For the ordinal `{NN}`: check the highest existing `{NN}` for the same prefix and today's date in `docs/decisions/` and use the next one.
+
+### ADR file format
+
+```markdown
+# {ID} — {Full Title}
+
+**Date:** YYYY-MM-DD **Status:** Resolved / Implemented
+**Area:** {files / subsystems affected}
+
+## Context
+
+Why this was needed / what problem existed.
+
+## Decision
+
+What was decided and implemented.
+
+## Consequences
+
+Impact, trade-offs, known limitations, follow-up items.
+```
+
+### BACKLOG.md — open items
+
+- When starting new work on a backlog item, **do not modify `BACKLOG.md` yet** — wait until it's resolved.
+- When work is complete: **delete the item from `BACKLOG.md`** and create an ADR in `docs/decisions/`.
+- When new debt or a new feature idea is discovered: **add it to `BACKLOG.md`** with a problem description.
+- `BACKLOG.md` must only ever contain open/unresolved items. Done = deleted from this file.
+
+### ADR must be in the same commit
+
+The ADR file **must be staged in the same commit as the code changes** — never as a follow-up commit.
+
+---
