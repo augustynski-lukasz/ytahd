@@ -85,6 +85,21 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
+            int commonShift = EstimateCommonShift(packet);
+            if (commonShift != int.MinValue)
+            {
+                var normalized = packet.ToArray();
+                for (int i = 0; i < normalized.Length; i++)
+                {
+                    normalized[i] = (byte)Math.Clamp(normalized[i] - commonShift, 0, 255);
+                }
+
+                if (TryDecode(normalized, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload))
+                {
+                    return true;
+                }
+            }
+
             int magic0Delta = Math.Abs(packet[0] - 0x59);
             int magic1Delta = Math.Abs(packet[1] - 0x54);
             int versionDelta = Math.Abs(packet[2] - FramePacket.FrameVersion);
@@ -94,12 +109,60 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            var normalized = packet.ToArray();
-            normalized[0] = 0x59;
-            normalized[1] = 0x54;
-            normalized[2] = FramePacket.FrameVersion;
+            var fallback = packet.ToArray();
+            fallback[0] = 0x59;
+            fallback[1] = 0x54;
+            fallback[2] = FramePacket.FrameVersion;
 
-            return TryDecode(normalized, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
+            return TryDecode(fallback, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
+        }
+
+        private static int EstimateCommonShift(ReadOnlySpan<byte> packet)
+        {
+            if (packet.Length < FramePacket.HeaderBytes)
+            {
+                return int.MinValue;
+            }
+
+            int expectedMagic0 = 0x59;
+            int expectedMagic1 = 0x54;
+            int expectedVersion = FramePacket.FrameVersion;
+            int expectedType = FramePacket.FrameTypeData;
+            int sum = 0;
+            int count = 0;
+
+            for (int i = 0; i < Math.Min(packet.Length, 8); i++)
+            {
+                int expectedValue = i switch
+                {
+                    0 => expectedMagic0,
+                    1 => expectedMagic1,
+                    2 => expectedVersion,
+                    3 => expectedType,
+                    _ => 0
+                };
+
+                sum += packet[i] - expectedValue;
+                count++;
+            }
+
+            int shift = count == 0 ? int.MinValue : (int)Math.Round((double)sum / count);
+            if (shift == int.MinValue)
+            {
+                return int.MinValue;
+            }
+
+            int magic0Delta = Math.Abs(packet[0] - (expectedMagic0 + shift));
+            int magic1Delta = Math.Abs(packet[1] - (expectedMagic1 + shift));
+            int versionDelta = Math.Abs(packet[2] - (expectedVersion + shift));
+            int frameTypeByte = packet[3];
+            bool typeIsValid = frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity;
+            if (magic0Delta <= 16 && magic1Delta <= 16 && versionDelta <= 8 && typeIsValid)
+            {
+                return shift;
+            }
+
+            return int.MinValue;
         }
 
         public static void WriteFrameHeader(byte[] framePacket, byte frameType, int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength)

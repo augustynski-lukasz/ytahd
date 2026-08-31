@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Xunit;
 using YTAHD.Core.Application;
+using YTAHD.Core.Core;
 using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
@@ -150,6 +151,71 @@ namespace YTAHD.Tests
             {
                 if (File.Exists(inputFile)) File.Delete(inputFile);
                 if (File.Exists(outputVideo)) File.Delete(outputVideo);
+            }
+        }
+
+        [Fact]
+        public async Task YtahdCodecService_UsesDurabilityMatrix_WhenEnabled()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the service durability integration test.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[256];
+                new Random(777).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var service = new YtahdCodecService(new BinaryGridModulator(), new DefaultFFmpegWrapperFactory(ffmpegPath));
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true,
+                    UseDurabilityMatrix = true,
+                    DurabilityMatrixOptions = new DurabilityMatrixOptions
+                    {
+                        SymbolSize = 32,
+                        GroupSize = 4,
+                        ParitySymbolsPerGroup = 1
+                    }
+                });
+
+                await service.DecodeAsync(new DecodeOptions
+                {
+                    InputVideo = outputVideo,
+                    OutputFile = outputFile,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true,
+                    UseDurabilityMatrix = true,
+                    DurabilityMatrixOptions = new DurabilityMatrixOptions
+                    {
+                        SymbolSize = 32,
+                        GroupSize = 4,
+                        ParitySymbolsPerGroup = 1
+                    }
+                });
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
             }
         }
 

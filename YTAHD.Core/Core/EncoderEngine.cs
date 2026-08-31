@@ -27,6 +27,8 @@ namespace YTAHD.Core.Core
         private readonly int _width;
         private readonly int _height;
         private readonly int _fps;
+        private readonly bool _useDurabilityMatrix;
+        private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
 
         public EncodeMetrics LastEncodeMetrics { get; private set; } = new();
 
@@ -38,11 +40,15 @@ namespace YTAHD.Core.Core
             _width = width;
             _height = height;
             _fps = fps;
+            _useDurabilityMatrix = false;
+            _durabilityMatrixOptions = null;
         }
 
         public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
             : this(modulator, ffmpeg, options.MacroblockSize, options.Width, options.Height, options.Fps)
         {
+            _useDurabilityMatrix = options.UseDurabilityMatrix;
+            _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -95,9 +101,19 @@ namespace YTAHD.Core.Core
             if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
 
-            int blocksX = _width / _macroblockSize;
-            int blocksY = _height / _macroblockSize;
-            int totalDataFrames = (data.Length + payloadBytesPerFrame - 1) / payloadBytesPerFrame;
+            int totalDataFrames;
+            var framePackets = Array.Empty<byte[]>();
+            if (_useDurabilityMatrix)
+            {
+                var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
+                framePackets = durabilityCodec.EncodeToFramePackets(data).ToArray();
+                totalDataFrames = framePackets.Length;
+            }
+            else
+            {
+                totalDataFrames = (data.Length + payloadBytesPerFrame - 1) / payloadBytesPerFrame;
+            }
+
             int totalFramesWritten = 0;
 
             LastEncodeMetrics = new EncodeMetrics
@@ -111,12 +127,6 @@ namespace YTAHD.Core.Core
 
             using var ff = await _ffmpeg.StartAsync(outputVideo);
             var stdin = ff.StandardInput;
-
-            // paints for black/white
-            using var paintWhite = new SKPaint { Color = SKColors.White, IsAntialias = false };
-            using var paintBlack = new SKPaint { Color = SKColors.Black, IsAntialias = false };
-
-            int dataOffset = 0;
 
             async Task WriteFramePacketAsync(byte[] framePacket)
             {
@@ -133,35 +143,47 @@ namespace YTAHD.Core.Core
 
             try
             {
-                for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
+                if (_useDurabilityMatrix)
                 {
-                    int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
-                    var parityPayload = new byte[payloadBytesPerFrame];
-
-                    for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
+                    foreach (var framePacket in framePackets)
                     {
-                        int frameIdx = groupStart + idxInGroup;
-                        int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
-                        var payload = new byte[payloadBytesPerFrame];
-                        if (payloadLen > 0)
-                        {
-                            Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
-                        }
-
-                        for (int i = 0; i < payloadBytesPerFrame; i++)
-                        {
-                            parityPayload[i] ^= payload[i];
-                        }
-
-                        var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
                         await WriteFramePacketAsync(framePacket);
                         totalFramesWritten++;
-                        dataOffset += payloadLen;
                     }
+                }
+                else
+                {
+                    int dataOffset = 0;
+                    for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
+                    {
+                        int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
+                        var parityPayload = new byte[payloadBytesPerFrame];
 
-                    var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
-                    await WriteFramePacketAsync(parityPacket);
-                    totalFramesWritten++;
+                        for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
+                        {
+                            int frameIdx = groupStart + idxInGroup;
+                            int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
+                            var payload = new byte[payloadBytesPerFrame];
+                            if (payloadLen > 0)
+                            {
+                                Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
+                            }
+
+                            for (int i = 0; i < payloadBytesPerFrame; i++)
+                            {
+                                parityPayload[i] ^= payload[i];
+                            }
+
+                            var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
+                            await WriteFramePacketAsync(framePacket);
+                            totalFramesWritten++;
+                            dataOffset += payloadLen;
+                        }
+
+                        var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
+                        await WriteFramePacketAsync(parityPacket);
+                        totalFramesWritten++;
+                    }
                 }
             }
             finally

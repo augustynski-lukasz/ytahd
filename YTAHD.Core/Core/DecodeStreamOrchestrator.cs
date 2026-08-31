@@ -12,18 +12,27 @@ namespace YTAHD.Core.Core
         private readonly int _width;
         private readonly int _height;
         private readonly int _macroblockSize;
+        private readonly bool _useDurabilityMatrix;
+        private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
 
         public DecodeStreamOrchestrator(int width, int height, int macroblockSize)
-            : this(new BinaryGridModulator(macroblockSize, macroblockSize), width, height, macroblockSize)
+            : this(new BinaryGridModulator(macroblockSize, macroblockSize), width, height, macroblockSize, false, null)
         {
         }
 
         public DecodeStreamOrchestrator(IModulator modulator, int width, int height, int macroblockSize)
+            : this(modulator, width, height, macroblockSize, false, null)
+        {
+        }
+
+        public DecodeStreamOrchestrator(IModulator modulator, int width, int height, int macroblockSize, bool useDurabilityMatrix, DurabilityMatrixOptions? durabilityMatrixOptions)
         {
             _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
             _width = width;
             _height = height;
             _macroblockSize = macroblockSize;
+            _useDurabilityMatrix = useDurabilityMatrix;
+            _durabilityMatrixOptions = durabilityMatrixOptions ?? new DurabilityMatrixOptions();
         }
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
@@ -48,9 +57,76 @@ namespace YTAHD.Core.Core
             var packetGeometry = geometry with { BitsPerFrame = bitsPerFrame };
             int packetByteLength = _modulator.GetPacketBufferLength(packetGeometry, payloadBytesPerFrame);
 
+            if (_useDurabilityMatrix)
+            {
+                var packets = new List<byte[]>();
+                byte[] frameBuf = new byte[frameBytes];
+                while (true)
+                {
+                    int read = 0;
+                    while (read < frameBytes)
+                    {
+                        int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
+                        if (r == 0) break;
+                        read += r;
+                    }
+
+                    if (read < frameBytes) break;
+
+                    if (DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
+                    {
+                        packets.Add(packet);
+                    }
+                }
+
+                var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
+                var uniqueDataLengths = new Dictionary<(int GroupId, int SymbolId), int>();
+                foreach (var packet in packets)
+                {
+                    if (!FramePacketCodec.TryDecodeWithTolerance(packet, out var frameType, out var frameIndex, out _, out var groupStart, out _, out var payloadLength, out _))
+                    {
+                        continue;
+                    }
+
+                    if (frameType != FramePacket.FrameTypeData)
+                    {
+                        continue;
+                    }
+
+                    var groupId = groupStart / Math.Max(1, _durabilityMatrixOptions?.GroupSize ?? 1);
+                    var symbolId = Math.Max(0, frameIndex - groupStart);
+                    var key = (groupId, symbolId);
+                    if (!uniqueDataLengths.ContainsKey(key))
+                    {
+                        uniqueDataLengths[key] = payloadLength;
+                    }
+                }
+
+                int recoveredLength = uniqueDataLengths.Values.Sum();
+                if (recoveredLength <= 0)
+                {
+                    throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
+                }
+
+                if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes))
+                {
+                    throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
+                }
+
+                LastDecodeMetrics = new DecodeMetrics
+                {
+                    TotalDecodedPayloadBytes = decodedBytes,
+                    TotalFramesDecoded = packets.Count,
+                    TotalFramesSeen = packets.Count,
+                    RecoveredGroupCount = packets.Count
+                };
+
+                return payload;
+            }
+
             var accumulator = new DecodedFrameAccumulator();
             const int repeatedFrameCount = 3;
-            byte[] frameBuf = new byte[frameBytes];
+            byte[] frameBufLegacy = new byte[frameBytes];
             var duplicateTracker = new DuplicateFrameRunTracker();
             var metrics = new DecodeMetrics();
 
@@ -64,7 +140,7 @@ namespace YTAHD.Core.Core
 
             bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
             {
-                return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, packetByteLength, _modulator);
+                return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
             }
 
             while (true)
@@ -72,7 +148,7 @@ namespace YTAHD.Core.Core
                 int read = 0;
                 while (read < frameBytes)
                 {
-                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
+                    int r = await rgbStream.ReadAsync(frameBufLegacy, read, frameBytes - read);
                     if (r == 0) break;
                     read += r;
                 }
@@ -81,16 +157,16 @@ namespace YTAHD.Core.Core
 
                 metrics.TotalFramesSeen++;
 
-                if (!DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
+                if (!DecoderEngine.TryReadDecodedPacket(frameBufLegacy, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
                 {
                     metrics.InvalidPacketCount++;
                     continue;
                 }
 
-                var currentLogicalSignature = CreateLogicalSignature(frameBuf);
+                var currentLogicalSignature = CreateLogicalSignature(frameBufLegacy);
                 int currentQuality = DecoderEngine.GetPacketQualityScore(packet);
 
-                var completedFrame = duplicateTracker.Update(frameBuf, currentLogicalSignature, currentQuality);
+                var completedFrame = duplicateTracker.Update(frameBufLegacy, currentLogicalSignature, currentQuality);
                 if (completedFrame is not null)
                 {
                     metrics.DuplicateRunCount++;

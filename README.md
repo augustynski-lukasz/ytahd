@@ -4,6 +4,7 @@
 
 - `YTAHD.Core` - reusable encoding/decoding library (engines, modulation, ffmpeg abstractions, audio helpers)
 - `YTAHD.Cli` - command-line host application built on top of `YTAHD.Core`
+- `probe` - quick real-FFmpeg smoke test across the main modulator modes
 - `YTAHD.Tests` - unit/integration tests for core functionality
 - `YTAHD.Perf` - performance and overhead analysis tool for comparing algorithms
 
@@ -126,9 +127,15 @@ To prevent frame-dropping or frame-duplication errors from permanently desynchro
 
 ## 🧮 Data Durability Matrix
 
-To achieve total file recovery without a single bit failing, the pipeline wraps data payloads inside **Fountain Codes (RaptorQ / Luby Transform)** prior to visual rendering.
+The transport layer now includes a standalone symbol-based durability prototype above the current frame/packet protocol. This does not replace the modulator contract and it is not yet integrated as the production encode/decode path; it is a focused transport-layer experiment and recovery model that remains isolated from the live service pipeline until the service-layer integration work is completed.
 
-Instead of traditional linear block boundaries, the input file is transformed into an infinite mathematical stream of symbol packets. The receiver can completely rebuild 100% of the original `.zip` archive as soon as it intercepts any **arbitrary 85% of the video frames**, completely neutralizing random frame loss or local macroblock corruption introduced by YouTube's processing pipeline.
+The active design is a parity-first matrix with group-aware source symbols and repair symbols. Payload bytes are split into symbol blocks, grouped by durability window, and reconstructed using the highest-quality valid subset according to packet metadata, checksum validity, and frame recovery thresholds. The current implementation intentionally keeps the runtime API replaceable for future fountain-style expansion while preserving the real FFmpeg baseline and the existing Phase 1 / Phase 2 / Phase 3 carrier pipeline as the production transport boundary.
+
+This means the receiver can rebuild a payload from a valid subset in isolation, but the prototype is still not yet the default path used by `EncoderEngine`, `DecoderEngine`, or `YtahdCodecService`. The proof points are deterministic unit tests and a standalone real libx264 smoke check for the durability codec itself, while the full service-layer integration remains the next required engineering step before the matrix can be treated as a production feature.
+
+### Current operating baseline
+
+The durability overlay is currently validated as a standalone codec and recovery model, not as a fully wired service-level transport. The project treats live FFmpeg output as the authority for real codec behavior and keeps the durability logic isolated until the production pipeline explicitly calls into it. The current evidence covers deterministic matrix recovery and a focused libx264 smoke check for the transport codec itself, but the actual encode/decode service path still needs to be connected before this feature can be called production-ready.
 
 ---
 

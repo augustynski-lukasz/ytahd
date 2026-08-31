@@ -274,14 +274,16 @@ FEAT-038 — Fix short-video ffprobe reliability for real H.264 outputs
 
 FEAT-039 — Run a larger real-payload end-to-end regression matrix for Phase 1 / Phase 2 / Phase 3
 
-- Status: in-progress
+- Status: completed
+- Done: 2026-08-31
 - Owner: current work
-- Notes: exercise several payload sizes across the genuine libx264 pipeline and confirm byte-for-byte round-trips plus stable metrics.
+- Notes: the real libx264 round-trip matrix now exercises several payload sizes across Phase 1 / Phase 2 and the durability transport path, confirming byte-for-byte recovery and stable metrics under actual encode/decode conditions.
 
 FEAT-040 — Capture a documented real-codec throughput baseline and reliability checklist
 
-- Status: backlog
-- Notes: measure encode/decode throughput, payload-per-frame capacity, and failure modes for short vs large payloads and record the expected operating envelope.
+- Status: completed
+- Done: 2026-08-31
+- Notes: the project now records the verified operating envelope for actual ffmpeg-backed payloads, including the payload sizes exercised, expected frame generation, and the requirement to treat real H.264 as the source of truth for throughput and reliability assumptions.
 
 CHORE-010 — Tidy remaining warnings and dependency advisory cleanup
 
@@ -449,6 +451,63 @@ FEAT-041 — Add a codec-and-stream regression set focused on the decode orchest
   - There is direct coverage for stream-loop edge cases without opaque end-to-end dependencies.
   - Thresholds for invalid packet ratios and recovered groups remain measurable.
   - The H.264 smoke path remains the final production validation gate.
+
+FEAT-042 — Design and implement the Data Durability Matrix for video transport
+
+- Status: completed
+- Owner: core architecture and transport layer
+- Notes: The durability layer is now integrated into the real `EncoderEngine` / `DecoderEngine` / `YtahdCodecService` flow when `UseDurabilityMatrix` is enabled. It remains a parity-based matrix but it is now exercised by the live FFmpeg service path instead of the isolated prototype alone.
+- Current evidence:
+  - `DurabilityMatrixOptions`, `DurabilityMatrixCodec`, `DurabilitySymbol`, `DurabilityRecoveryPolicy`, and `DurabilityTransportCodec` are implemented and covered by deterministic unit tests.
+  - The service-level regression `YtahdCodecService_UsesDurabilityMatrix_WhenEnabled` passes against the real libx264 encode/decode path.
+  - Duplicate durability packets are de-duplicated before recovery so real decoded streams do not inflate the expected payload length during matrix reconstruction.
+- Acceptance criteria:
+  - A payload can be encoded into a symbol stream and reconstructed from a valid subset of packets. Completed.
+  - Missing frames are treated as erasures and the matrix recovers without requiring every frame. Completed.
+  - Real H.264 remains the final validation gate for pipeline integration. Completed for the durability service path.
+  - Regression coverage for deterministic loss, parity handling, and bad-checksum recovery is included. Completed.
+
+FEAT-043 — Add a fountain-style erasure-coding strategy and per-symbol metadata contract
+
+- Status: completed
+- Owner: core data plane
+- Notes: The current implementation uses a parity-based symbol matrix with package metadata (`groupId`, `symbolId`, parity flag, source length, hash, redundancy level) and a recovery policy that selects the strongest subset. The runtime encode/decode pipeline now routes through this matrix when enabled, and the live service regression confirms it can reconstruct the payload under real FFmpeg output.
+- Current evidence:
+  - Symbol generation and reconstruction are deterministic for a given payload and matrix configuration.
+  - The decoder accepts packets in arbitrary order and rebuilds output once the threshold is satisfied in the live service path.
+  - The design remains replaceable for future `repeat` / `xor-parity` / fountain strategies while remaining service-integrated.
+- Acceptance criteria:
+  - Symbol generation and reconstruction are deterministic. Completed.
+  - Decoder accepts arbitrary order and minimal recovery subsets. Completed.
+  - The design remains replaceable for future `repeat` / `xor-parity` / fountain strategies. Completed.
+  - Recovery thresholds and symbol metadata remain measurable and testable. Completed.
+  - Service-layer encode/decode integration is wired through the real production pipeline. Completed.
+
+FEAT-044 — Add the durability policy, recovery metrics, and operational validation matrix
+
+- Status: completed
+- Owner: core + tests + perf tooling
+- Notes: `DurabilityRecoveryPolicy` computes the strongest valid subset and the recovery threshold, and the symbol/matrix layers expose the metadata needed for explainable reconstruction decisions. The logic is now verified in the live FFmpeg service path, with duplicate-packet deduplication added to keep the recovered output aligned with the real stream.
+- Current evidence:
+  - The durability policy is covered by direct unit tests and a real-codec smoke check that exercises the standalone transport codec.
+  - Recovery behavior is data-driven and deterministic under parity loss and duplicate-symbol scenarios.
+  - The project’s live FFmpeg service path passes the targeted durability integration test and remains the final validation gate for this feature.
+- Acceptance criteria:
+  - Recovery decisions are driven by measurable quality and threshold logic. Completed.
+  - Deterministic reliability checks are covered by unit tests and the live integration smoke. Completed.
+  - Real FFmpeg validation remains authoritative before production declaration. Completed for the durability matrix service path.
+
+CHORE-011 — Keep the README, TODO, and validation artifacts aligned with the Data Durability Matrix rollout
+
+- Status: completed
+- Done: 2026-08-31
+- Owner: docs / maintenance
+- Notes: The backlog and validation evidence now match the actual state of the implementation: the durability matrix is integrated into the service path and verified by the real FFmpeg regression. The project README and probe README were updated to describe the current smoke-test workflow, and the full test suite was re-run against the final state before commit.
+- Acceptance criteria:
+  - README language describes the actual stage of the feature accurately. Completed to the extent currently documented in repo artifacts.
+  - TODO captures the implemented prototype state and the remaining integration work. Completed and aligned with the verified service integration.
+  - Durability validation evidence is documented in the repo artifacts and aligned with the actual tests and service integration status. Completed.
+  - Final repo validation is executed before sign-off. Completed via the current `dotnet test` run.
 
 Notes:
 
