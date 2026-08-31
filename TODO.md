@@ -509,6 +509,25 @@ CHORE-011 — Keep the README, TODO, and validation artifacts aligned with the D
   - Durability validation evidence is documented in the repo artifacts and aligned with the actual tests and service integration status. Completed.
   - Final repo validation is executed before sign-off. Completed via the current `dotnet test` run.
 
+FEAT-045 — Implement genuine Phase 3 DCT-domain encoding via IDCT synthesis and forward DCT recovery
+
+- Status: completed
+- Done: 2026-08-31
+- Notes: The previous Phase 3 implementation was a binary 0xE0/0x20 pixel approach that shared Phase 1's block-contrast strategy. It is replaced with a proper frequency-domain carrier: each 8×8 block is synthesised from a DC coefficient plus 8 low-frequency AC carriers using the orthonormal 2-D IDCT. On decode, a forward DCT recovers the sign of each carrier coefficient, which encodes 1 bit. The resulting frames are smooth organic gradients — exactly what lossy video codecs preserve with minimum loss.
+- Acceptance criteria:
+  - `DctCarrierBasis` exposes `CosTable`, `CarrierPositions`, `DcCoeff`, `CarrierAmplitude`, and `C(k)`. Completed.
+  - `DctModulator` synthesises frames via IDCT; 1 byte per 8×8 block; no binary high/low pixel levels. Completed.
+  - `DctFrameBitDecoder` recovers bits by computing forward DCT coefficients and reading their signs. Completed.
+  - Single-block `Encode`/`Decode` round-trips are exact for all 256 byte values. Completed.
+  - Full-frame capacity is `blocksX × blocksY × 1` bytes (halved from the previous 2-byte-per-block design). Completed.
+  - All 105 existing tests pass unchanged after the redesign. Completed.
+
+CHORE-012 — Update README Phase 3 description and TODO to reflect the production DCT algorithm
+
+- Status: completed
+- Done: 2026-08-31
+- Notes: README Phase 3 section now documents the actual algorithm: carrier positions, IDCT synthesis formula, forward DCT decode formula, coefficient-sign robustness argument, and the 1-byte-per-block capacity. TODO aligned with current state.
+
 Notes:
 
 - Use FEAT-XXX for feature work, BUG-XXX for bug fixes, CHORE-XXX for maintenance tasks.

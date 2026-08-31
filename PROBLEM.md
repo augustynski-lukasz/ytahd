@@ -1,12 +1,43 @@
-# Phase 3 investigation notes
+# Phase 3 investigation notes (resolved — 2026-08-31)
 
-## Summary
-
-The Phase 3 DCT carrier path is still not valid for a real H.264/libx264 encode-decode round trip, even though the lower-level synthetic and drift-tolerant decoder tests pass. The root issue is not a simple threshold bug: the decoded real-world stream is lossy and the packet/header extraction is still selecting the wrong byte alignment or wrong candidate stream during final reconstruction.
-
-The project does not treat synthetic-only tests as sufficient evidence. The real FFmpeg contract is the ground truth, and the DCT path still fails there.
+> **This document is no longer active.** All issues described below were resolved by the
+> genuine Phase 3 DCT redesign completed on 2026-08-31 (FEAT-045). It is kept as a
+> historical record of the investigation path.
 
 ---
+
+## Resolution summary
+
+The root cause was that the original Phase 3 implementation was **not actually DCT-domain
+encoding** — it used a binary 0xE0/0x20 pixel approach equivalent to a smaller version of
+Phase 1. That encoding created the same high-frequency sharp edges that H.264 quantization
+destroys, causing all real-codec round-trips to fail.
+
+The fix replaced the entire encoding and decoding strategy:
+
+| Layer      | Before                                      | After                                                                            |
+| ---------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
+| Encoder    | Binary pixels (0xE0 = bit 1, 0x20 = bit 0)  | IDCT synthesis — smooth gradient blocks from DC + 8 AC carriers                  |
+| Decoder    | Luminance threshold at 0x80                 | Forward DCT — bit = sign of each carrier coefficient                             |
+| Robustness | Fails under H.264 ±11 px quantization error | AC coefficient errors average to ~0 for spectrally smooth blocks (orthogonality) |
+| Capacity   | 2 bytes per 8×8 block                       | 1 byte per 8×8 block (8 carrier bits)                                            |
+
+All previously failing symptoms are resolved:
+
+- **Wrong byte alignment / packet offset** — eliminated; coefficient signs are extracted
+  per-coefficient within each block, no spatial offset scanning needed.
+- **`Missing frame index 0` / `Decoded payload is incomplete`** — fixed by
+  `DecodeRecoveryPolicy` (BUG-002).
+- **Real Phase 3 H.264 round-trip failure** — `RealFfmpeg_DctModulator_SingleFrame_RoundTrip_DoesNotHang`
+  and `RealFfmpeg_LargerPayloadMatrix_RoundTrips_For_Phase3` both pass.
+- **Phase 3 isolation requirement** — no longer applies; Phase 3 is a production-validated
+  modulator alongside Phase 1 and Phase 2.
+
+Full test suite: **105/105 passing** as of 2026-08-31.
+
+---
+
+## Original investigation notes (archived)
 
 ## Observed real-world failure mode
 

@@ -49,7 +49,11 @@ The Phase 1 baseline currently targets the real H.264 path (`libx264`), which is
 
 ### Current implementation status
 
-The real FFmpeg pipeline is working and the lossy decoder has been hardened to tolerate H.264 drift, duplicate frame runs, and empty/weak payloads without silently accepting corrupted output. The packet protocol and quality-scoring logic have been centralized into dedicated helpers, and the remaining backlog is focused on extractive refactors at the decode orchestration boundary (`REFACTOR-008`, `REFACTOR-009`, and `FEAT-041`).
+The real FFmpeg pipeline is working and the lossy decoder has been hardened to tolerate H.264 drift, duplicate frame runs, and empty/weak payloads without silently accepting corrupted output. The packet protocol and quality-scoring logic have been centralized into dedicated helpers.
+
+Phase 1 (monochrome binary grid) and Phase 2 (pseudo-QAM multi-channel) are the production-validated baselines. Phase 3 (DCT-domain carrier) is fully implemented: each 8×8 block is synthesised via IDCT from a DC term and 8 low-frequency AC carriers, and bits are recovered on decode by reading forward DCT coefficient signs. All three modulator paths pass the full test suite including real libx264 round-trip smoke checks. The Data Durability Matrix (parity-based symbol transport) is integrated into the service pipeline and verified under real FFmpeg output.
+
+The remaining backlog is maintenance and Phase 4 design work (`CHORE-010`, Phase 4 motion-vector research).
 
 A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
 
@@ -103,9 +107,66 @@ The project is structured into 4 sequential evolutionary phases, moving from bas
 
 ### Phase 3: Discrete Cosine Transform (DCT-Domain) Engineering
 
-- **Concept:** Instead of generating sharp square blocks (which create high-frequency noise that the codec hates), we inject data directly into the frequency domain using DCT, matching how the VP9 encoder perceives the image.
-- **Modulation:** We mathematically synthesize 8×8 or 16×16 blocks using only low and mid-frequency cosine waves (the top-left section of the DCT matrix). The high-frequency zones (bottom-right) are left as zeros.
-- **Advantage:** The resulting video frames appear perfectly smooth, soft, and organic to the YouTube encoder. The compressor preserves these frames with maximum priority and zero ringing artifacts, allowing the datagram lifespan to be safely reduced to **2 frames**.
+- **Concept:** Instead of generating sharp square blocks (which create high-frequency noise that the codec discards), data is injected directly into the frequency domain by synthesising each 8×8 pixel block from a DC term plus 8 low-frequency AC cosine carriers via the 2-D Inverse Discrete Cosine Transform (IDCT). The high-frequency coefficients (bottom-right of the 8×8 DCT matrix) are left at zero. The resulting frames appear as smooth, organic gradients — exactly the signal structure that lossy video codecs preserve with highest priority.
+
+#### Carrier positions
+
+Eight AC coefficient positions are used, chosen as the 8 lowest-frequency non-DC entries of the 8×8 DCT matrix (ordered by $u+v$ ascending):
+
+$$
+(u, v) \in \{(0,1),(1,0),(1,1),(0,2),(2,0),(0,3),(3,0),(1,2)\}
+$$
+
+Each position encodes 1 bit. Together they give **1 byte per 8×8 block**.
+
+#### Encoding: IDCT synthesis
+
+For each payload byte, 8 bits select the sign of each carrier coefficient. The DC coefficient is fixed at 1024 (producing a mean pixel value of 128). Each pixel $f(x,y)$ in the 8×8 block is computed as:
+
+$$
+f(x,y) = \underbrace{\frac{C(0)^2}{4} \cdot 1024}_{= 128\text{ (DC)}}
+\;+\;
+\sum_{i=0}^{7}
+\frac{C(u_i)\,C(v_i)}{4}
+\cdot
+(\text{bit}_i = 1 \;?\; +128 : -128)
+\cdot
+\cos\!\frac{(2x{+}1)\,u_i\,\pi}{16}
+\cdot
+\cos\!\frac{(2y{+}1)\,v_i\,\pi}{16}
+$$
+
+where $C(k) = 1/\!\sqrt{2}$ for $k=0$ and $C(k)=1$ for $k>0$. Pixel values are clamped to $[0,255]$.
+
+The carrier amplitude of 128 produces pixel-domain waves of roughly $\pm 18$–$32$ luma units above the DC mean — well above H.264 CRF-23 quantization noise for spectrally smooth blocks.
+
+#### Decoding: forward DCT
+
+On decode, the forward 2-D DCT is applied to each 8×8 block of luma values. The sign of each carrier coefficient recovers 1 bit:
+
+$$
+F(u,v) = \frac{C(u)\,C(v)}{4}
+\sum_{x=0}^{7}\sum_{y=0}^{7}
+f(x,y)
+\cdot
+\cos\!\frac{(2x{+}1)\,u\,\pi}{16}
+\cdot
+\cos\!\frac{(2y{+}1)\,v\,\pi}{16}
+\qquad
+\text{bit} = \bigl[F(u,v) > 0\bigr]
+$$
+
+**Noise robustness:** H.264 quantization errors on spectrally smooth blocks are approximately zero-mean and uncorrelated. Because $\sum_{x=0}^{7}\cos\frac{(2x+1)k\pi}{16} = 0$ for $k>0$, the error contribution to any AC coefficient averages to near zero across the 64-pixel block. Coefficient signs therefore survive lossy compression reliably, unlike per-pixel thresholding.
+
+#### Capacity
+
+$$
+\text{bytes per frame} = \left\lfloor\frac{W - 2B}{8}\right\rfloor \times \left\lfloor\frac{H - 2B}{8}\right\rfloor \times 1
+$$
+
+where $W$, $H$ are frame dimensions and $B$ is the border width (default 32 px). For 3840×2160 with a 32 px border: $\lfloor 3776/8 \rfloor \times \lfloor 2096/8 \rfloor = 472 \times 262 = 123{,}664$ bytes per frame.
+
+- **Datagram lifespan:** 2 frames at 60 FPS (smooth blocks are codec-friendly; fewer repeat frames are needed for stability).
 
 ### Phase 4: Motion Vector Abuse (Temporal Tracking)
 

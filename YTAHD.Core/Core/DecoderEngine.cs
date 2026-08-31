@@ -226,6 +226,8 @@ namespace YTAHD.Core.Core
             if (!File.Exists(inputVideo))
                 throw new FileNotFoundException("Input video not found", inputVideo);
 
+            DebugTrace.Log("DecoderEngine", $"Starting decode for '{inputVideo}' => '{outputFile}' width={_width} height={_height} fps={_fps} modulator={_modulator.GetType().Name} useDurability={_useDurabilityMatrix}");
+
             var (width, height, fps) = await GetVideoMetadataAsync(inputVideo);
             var ffmpegPath = _ffmpeg.ExecutablePath;
             if (string.IsNullOrWhiteSpace(ffmpegPath) || ffmpegPath.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
@@ -242,9 +244,11 @@ namespace YTAHD.Core.Core
                 RedirectStandardError = true
             };
 
+            DebugTrace.Log("DecoderEngine", $"FFmpeg decode command: {ffmpegPath} {args}");
             using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start ffmpeg for decode.");
             await DecodeFromRgbStreamAsync(process.StandardOutput.BaseStream, width, height, _macroblockSize, outputFile);
             await process.WaitForExitAsync();
+            DebugTrace.Log("DecoderEngine", $"FFmpeg decode exited with code {process.ExitCode}.");
         }
 
         /// <summary>

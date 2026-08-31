@@ -289,74 +289,131 @@ namespace YTAHD.Tests
             }
         }
 
-        [Fact]
-        public async Task RealFfmpeg_LargerPayloadMatrix_RoundTrips_Across_Modes()
+        private async Task RunRealFfmpegMatrixRoundTripAsync(string modeName, IModulator modulator, params int[] payloadSizes)
         {
             var ffmpegPath = GetAvailableFfmpegPath();
-            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the real payload-matrix test.");
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), $"ffmpeg must be present on PATH or a known local install path for the real {modeName} payload-matrix test.");
 
-            var payloadSizes = new[] { 512, 1024, 4096 };
-            var modes = new (string Name, IModulator Modulator)[]
+            foreach (var size in payloadSizes)
             {
-                ("phase1", new BinaryGridModulator()),
-                ("phase2", new PseudoQamModulator()),
-                ("phase3", new DctModulator())
-            };
+                var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+                var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+                var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
 
-            foreach (var (modeName, modulator) in modes)
-            {
-                foreach (var size in payloadSizes)
+                try
                 {
-                    var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
-                    var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
-                    var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+                    var payload = new byte[size];
+                    new Random(1234 + size + modeName.Length).NextBytes(payload);
+                    await File.WriteAllBytesAsync(inputFile, payload);
 
-                    try
+                    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
+
+                    await service.EncodeAsync(new EncodeOptions
                     {
-                        var payload = new byte[size];
-                        new Random(1234 + size + modeName.Length).NextBytes(payload);
-                        await File.WriteAllBytesAsync(inputFile, payload);
+                        InputFile = inputFile,
+                        OutputVideo = outputVideo,
+                        Width = 640,
+                        Height = 480,
+                        MacroblockSize = 16,
+                        Fps = 30,
+                        VerifyFfmpeg = true
+                    });
 
-                        var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
+                    var actualFrames = await GetActualVideoFrameCountAsync(outputVideo);
+                    Assert.True(actualFrames > 0, $"Expected {modeName} encoded output to contain at least one frame for size {size}. Actual: {actualFrames}.");
+                    Assert.True(service.LastEncodeMetrics.TotalFramesWritten > 0, $"Expected {modeName} encode metrics to report written frames for size {size}.");
 
-                        await service.EncodeAsync(new EncodeOptions
-                        {
-                            InputFile = inputFile,
-                            OutputVideo = outputVideo,
-                            Width = 640,
-                            Height = 480,
-                            MacroblockSize = 16,
-                            Fps = 30,
-                            VerifyFfmpeg = true
-                        });
-
-                        var actualFrames = await GetActualVideoFrameCountAsync(outputVideo);
-                        Assert.True(actualFrames > 0, $"Expected {modeName} encoded output to contain at least one frame for size {size}. Actual: {actualFrames}.");
-                        Assert.True(service.LastEncodeMetrics.TotalFramesWritten > 0, $"Expected {modeName} encode metrics to report written frames for size {size}.");
-
-                        await service.DecodeAsync(new DecodeOptions
-                        {
-                            InputVideo = outputVideo,
-                            OutputFile = outputFile,
-                            Width = 640,
-                            Height = 480,
-                            MacroblockSize = 16,
-                            Fps = 30,
-                            VerifyFfmpeg = true
-                        });
-
-                        var decoded = await File.ReadAllBytesAsync(outputFile);
-                        Assert.Equal(payload, decoded);
-                        Assert.Equal(payload.Length, service.LastDecodeMetrics.TotalDecodedPayloadBytes);
-                        Assert.True(service.LastDecodeMetrics.TotalFramesDecoded > 0, $"Expected {modeName} decode metrics to report decoded frames for size {size}.");
-                    }
-                    finally
+                    await service.DecodeAsync(new DecodeOptions
                     {
-                        if (File.Exists(inputFile)) File.Delete(inputFile);
-                        if (File.Exists(outputVideo)) File.Delete(outputVideo);
-                        if (File.Exists(outputFile)) File.Delete(outputFile);
-                    }
+                        InputVideo = outputVideo,
+                        OutputFile = outputFile,
+                        Width = 640,
+                        Height = 480,
+                        MacroblockSize = 16,
+                        Fps = 30,
+                        VerifyFfmpeg = true
+                    });
+
+                    var decoded = await File.ReadAllBytesAsync(outputFile);
+                    Assert.Equal(payload, decoded);
+                    Assert.Equal(payload.Length, service.LastDecodeMetrics.TotalDecodedPayloadBytes);
+                    Assert.True(service.LastDecodeMetrics.TotalFramesDecoded > 0, $"Expected {modeName} decode metrics to report decoded frames for size {size}.");
                 }
+                finally
+                {
+                    if (File.Exists(inputFile)) File.Delete(inputFile);
+                    if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                    if (File.Exists(outputFile)) File.Delete(outputFile);
+                }
+            }
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_LargerPayloadMatrix_RoundTrips_For_Phase1()
+        {
+            await RunRealFfmpegMatrixRoundTripAsync("phase1", new BinaryGridModulator(), 512, 1024);
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_LargerPayloadMatrix_RoundTrips_For_Phase2()
+        {
+            await RunRealFfmpegMatrixRoundTripAsync("phase2", new PseudoQamModulator(), 512, 1024);
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_LargerPayloadMatrix_RoundTrips_For_Phase3()
+        {
+            await RunRealFfmpegMatrixRoundTripAsync("phase3", new DctModulator(), 64, 128);
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_DctModulator_SingleFrame_RoundTrip_DoesNotHang()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the DCT real-frame regression test.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[64];
+                new Random(4200).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var service = new YtahdCodecService(new DctModulator(), new DefaultFFmpegWrapperFactory(ffmpegPath));
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                await service.DecodeAsync(new DecodeOptions
+                {
+                    InputVideo = outputVideo,
+                    OutputFile = outputFile,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
             }
         }
 

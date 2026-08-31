@@ -73,6 +73,53 @@ namespace YTAHD.Core.Core
             return true;
         }
 
+        public static bool TryNormalizeWithTolerance(ReadOnlySpan<byte> packet, Span<byte> normalizedPacket, out int shift)
+        {
+            shift = 0;
+            if (packet.Length < FramePacket.HeaderBytes || normalizedPacket.Length < packet.Length)
+            {
+                return false;
+            }
+
+            if (TryDecode(packet, out _, out _, out _, out _, out _, out _, out _))
+            {
+                packet.CopyTo(normalizedPacket);
+                return true;
+            }
+
+            int commonShift = EstimateCommonShift(packet);
+            if (commonShift != int.MinValue)
+            {
+                var normalized = packet.ToArray();
+                for (int i = 0; i < normalized.Length; i++)
+                {
+                    normalized[i] = (byte)Math.Clamp(normalized[i] - commonShift, 0, 255);
+                }
+
+                if (TryDecode(normalized, out _, out _, out _, out _, out _, out _, out _))
+                {
+                    shift = commonShift;
+                    normalized.AsSpan().CopyTo(normalizedPacket);
+                    return true;
+                }
+            }
+
+            int magic0Delta = Math.Abs(packet[0] - 0x59);
+            int magic1Delta = Math.Abs(packet[1] - 0x54);
+            int versionDelta = Math.Abs(packet[2] - FramePacket.FrameVersion);
+            int frameTypeByte = packet[3];
+            if (magic0Delta <= 16 && magic1Delta <= 16 && versionDelta <= 4 && (frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity))
+            {
+                packet.CopyTo(normalizedPacket);
+                normalizedPacket[0] = 0x59;
+                normalizedPacket[1] = 0x54;
+                normalizedPacket[2] = FramePacket.FrameVersion;
+                return TryDecode(normalizedPacket, out _, out _, out _, out _, out _, out _, out _);
+            }
+
+            return false;
+        }
+
         public static bool TryDecodeWithTolerance(ReadOnlySpan<byte> packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
         {
             if (TryDecode(packet, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload))
@@ -85,36 +132,13 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            int commonShift = EstimateCommonShift(packet);
-            if (commonShift != int.MinValue)
+            var normalized = new byte[packet.Length];
+            if (TryNormalizeWithTolerance(packet, normalized, out _))
             {
-                var normalized = packet.ToArray();
-                for (int i = 0; i < normalized.Length; i++)
-                {
-                    normalized[i] = (byte)Math.Clamp(normalized[i] - commonShift, 0, 255);
-                }
-
-                if (TryDecode(normalized, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload))
-                {
-                    return true;
-                }
+                return TryDecode(normalized, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
             }
 
-            int magic0Delta = Math.Abs(packet[0] - 0x59);
-            int magic1Delta = Math.Abs(packet[1] - 0x54);
-            int versionDelta = Math.Abs(packet[2] - FramePacket.FrameVersion);
-            int frameTypeByte = packet[3];
-            if (magic0Delta > 16 || magic1Delta > 16 || versionDelta > 4 || (frameTypeByte != FramePacket.FrameTypeData && frameTypeByte != FramePacket.FrameTypeParity))
-            {
-                return false;
-            }
-
-            var fallback = packet.ToArray();
-            fallback[0] = 0x59;
-            fallback[1] = 0x54;
-            fallback[2] = FramePacket.FrameVersion;
-
-            return TryDecode(fallback, out frameType, out frameIndex, out totalDataFrames, out groupStart, out groupCount, out payloadLength, out payload);
+            return false;
         }
 
         private static int EstimateCommonShift(ReadOnlySpan<byte> packet)

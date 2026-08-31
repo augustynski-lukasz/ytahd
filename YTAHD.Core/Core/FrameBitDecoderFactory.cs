@@ -269,127 +269,70 @@ namespace YTAHD.Core.Core
 
     public sealed class DctFrameBitDecoder : IFrameBitDecoder
     {
+        private const int BlockSize = DctCarrierBasis.BlockSize; // 8
+
+        /// <summary>
+        /// Decode a frame produced by <see cref="DctModulator"/>.
+        /// For each 8×8 block, a forward 2-D DCT is applied and the sign of each
+        /// carrier coefficient recovers 1 bit.  8 bits (1 byte) per block.
+        /// </summary>
         public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
         {
             packet.Clear();
 
-            const int blockSize = 8;
-            const int lowFrequencySize = 4;
             bool isRgba = frame.Length == width * height * 4;
             int bytesPerPixel = isRgba ? 4 : 3;
             int effectiveRowBytes = isRgba ? width * 4 : rowBytes;
 
-            var signalVariants = new[]
-            {
-                new List<int>(),
-                new List<int>(),
-                new List<int>(),
-                new List<int>()
-            };
+            int blocksX = Math.Max(1, (width - borderWidth * 2) / BlockSize);
+            int blocksY = Math.Max(1, (height - borderWidth * 2) / BlockSize);
+            var carriers = DctCarrierBasis.CarrierPositions;
+            var cos = DctCarrierBasis.CosTable;
 
-            int blocksX = Math.Max(1, (width - (borderWidth * 2)) / blockSize);
-            int blocksY = Math.Max(1, (height - (borderWidth * 2)) / blockSize);
+            int packetBitIndex = 0;
+            int totalBits = packet.Length * 8;
 
-            for (int blockY = 0; blockY < blocksY; blockY++)
+            for (int blockY = 0; blockY < blocksY && packetBitIndex < totalBits; blockY++)
             {
-                for (int blockX = 0; blockX < blocksX; blockX++)
+                for (int blockX = 0; blockX < blocksX && packetBitIndex < totalBits; blockX++)
                 {
-                    int baseX = borderWidth + (blockX * blockSize);
-                    int baseY = borderWidth + (blockY * blockSize);
+                    int bx = borderWidth + blockX * BlockSize;
+                    int by = borderWidth + blockY * BlockSize;
 
-                    for (int py = 0; py < lowFrequencySize; py++)
+                    for (int ci = 0; ci < carriers.Length && packetBitIndex < totalBits; ci++)
                     {
-                        for (int px = 0; px < lowFrequencySize; px++)
+                        var (u, v) = carriers[ci];
+                        double sum = 0;
+
+                        for (int py = 0; py < BlockSize; py++)
                         {
-                            int x = baseX + px;
-                            int y = baseY + py;
-                            if (x < 0 || y < 0 || x >= width || y >= height)
+                            for (int px = 0; px < BlockSize; px++)
                             {
-                                continue;
-                            }
+                                int x = bx + px;
+                                int y = by + py;
+                                if (x >= width || y >= height) continue;
+                                int idx = y * effectiveRowBytes + x * bytesPerPixel;
+                                if (idx + 2 >= frameBytes) continue;
 
-                            int idx = (y * effectiveRowBytes) + (x * bytesPerPixel);
-                            if (idx + 2 >= frameBytes)
-                            {
-                                continue;
-                            }
-
-                            byte r = frame[idx];
-                            byte g = frame[idx + 1];
-                            byte b = frame[idx + 2];
-                            signalVariants[0].Add(r);
-                            signalVariants[1].Add(g);
-                            signalVariants[2].Add(b);
-                            signalVariants[3].Add((byte)Math.Clamp((r + g + b) / 3, 0, 255));
-                        }
-                    }
-                }
-            }
-
-            int totalSamples = signalVariants[0].Count;
-            if (totalSamples == 0)
-            {
-                return;
-            }
-
-            byte[] bestCandidate = new byte[packet.Length];
-            int bestScore = int.MinValue;
-            bool hasValidHeaderCandidate = false;
-
-            foreach (int[] signal in signalVariants.Select(values => values.ToArray()))
-            {
-                if (signal.Length == 0)
-                {
-                    continue;
-                }
-
-                for (int startOffset = 0; startOffset <= Math.Max(0, signal.Length - FramePacket.HeaderBytes); startOffset++)
-                {
-                    int candidateBytes = Math.Min(packet.Length, signal.Length - startOffset);
-                    if (candidateBytes < FramePacket.HeaderBytes)
-                    {
-                        continue;
-                    }
-
-                    for (int delta = -32; delta <= 32; delta += 4)
-                    {
-                        var candidate = new byte[candidateBytes];
-                        for (int i = 0; i < candidateBytes; i++)
-                        {
-                            int adjusted = signal[startOffset + i] - delta;
-                            candidate[i] = (byte)Math.Clamp(adjusted, 0, 255);
-                        }
-
-                        if (FramePacketCodec.TryDecodeWithTolerance(candidate, out _, out _, out _, out _, out _, out _, out _))
-                        {
-                            candidate.AsSpan().CopyTo(packet);
-                            return;
-                        }
-
-                        if (candidate.Length >= FramePacket.HeaderBytes && FramePacketCodec.TryDecodeWithTolerance(candidate.AsSpan(0, FramePacket.HeaderBytes), out _, out _, out _, out _, out _, out _, out _))
-                        {
-                            int score = PacketQualityScorer.Score(candidate) + (Math.Abs(delta) < 8 ? 64 : 0) + (startOffset == 0 ? 128 : 0);
-                            if (score > bestScore)
-                            {
-                                bestScore = score;
-                                hasValidHeaderCandidate = true;
-                                candidate.AsSpan().CopyTo(bestCandidate);
+                                // luminance average (R=G=B for Phase 3 frames; tolerant of drift)
+                                double luma = (frame[idx] + frame[idx + 1] + frame[idx + 2]) / 3.0;
+                                sum += luma * cos[px, u] * cos[py, v];
                             }
                         }
+
+                        // Coefficient sign encodes the bit; DC (mean) has zero net contribution
+                        // to AC coefficients by orthogonality, so no bias correction is needed.
+                        double coeff = DctCarrierBasis.C(u) * DctCarrierBasis.C(v) / 4.0 * sum;
+                        int bit = coeff > 0 ? 1 : 0;
+
+                        int bytePos = packetBitIndex / 8;
+                        int bitPos = 7 - (packetBitIndex % 8);
+                        if (bytePos < packet.Length)
+                            packet[bytePos] = (byte)(packet[bytePos] | (bit << bitPos));
+
+                        packetBitIndex++;
                     }
                 }
-            }
-
-            if (hasValidHeaderCandidate)
-            {
-                bestCandidate.AsSpan().CopyTo(packet);
-                return;
-            }
-
-            int fallbackLength = Math.Min(totalSamples, packet.Length);
-            for (int i = 0; i < fallbackLength; i++)
-            {
-                packet[i] = (byte)Math.Clamp(signalVariants[3][i], 0, 255);
             }
         }
     }

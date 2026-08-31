@@ -1,19 +1,24 @@
 using System;
+using YTAHD.Core.Infrastructure;
 
 namespace YTAHD.Core.Modulation
 {
     /// <summary>
-    /// Phase 3: low-frequency DCT carrier modulator.
-    /// The encoder stores payload bytes as signed amplitudes on the top-left DCT basis values,
-    /// keeping the carrier inside the low-frequency region that video compression preserves best.
+    /// Phase 3: DCT-domain carrier modulator.
+    /// Each 8×8 block is synthesised via IDCT from a small set of low-frequency
+    /// cosine coefficients.  Bit 1 sets a carrier coefficient to +CarrierAmplitude,
+    /// bit 0 to -CarrierAmplitude.  The resulting frames appear as smooth organic
+    /// gradients that video codecs preserve with high fidelity.
+    /// On decode, a forward DCT recovers the coefficient signs.
     /// </summary>
     public sealed class DctModulator : IModulator
     {
-        private const int BasisSize = 8;
-        private const int Cutoff = 4;
+        private const int BlockSize = DctCarrierBasis.BlockSize;   // 8
+        // 1 byte per 8×8 block (8 carrier positions, 1 bit each).
+        private const int BytesPerBlock = 1;
 
-        public int MacroblockWidth => BasisSize;
-        public int MacroblockHeight => BasisSize;
+        public int MacroblockWidth => BlockSize;
+        public int MacroblockHeight => BlockSize;
 
         public int GetPayloadBytesPerFrame(ModulatorGeometry geometry)
         {
@@ -21,17 +26,14 @@ namespace YTAHD.Core.Modulation
             if (geometry.HeaderBytes < 0) throw new ArgumentOutOfRangeException(nameof(geometry));
             if (geometry.BorderWidth < 0) throw new ArgumentOutOfRangeException(nameof(geometry));
 
-            int usableWidth = Math.Max(0, geometry.Width - (geometry.BorderWidth * 2));
-            int usableHeight = Math.Max(0, geometry.Height - (geometry.BorderWidth * 2));
-            int dctBlocksX = Math.Max(1, usableWidth / BasisSize);
-            int dctBlocksY = Math.Max(1, usableHeight / BasisSize);
-            int payloadBytesPerFrame = dctBlocksX * dctBlocksY * Cutoff * Cutoff;
+            int usableWidth = Math.Max(0, geometry.Width - geometry.BorderWidth * 2);
+            int usableHeight = Math.Max(0, geometry.Height - geometry.BorderWidth * 2);
+            int blocksX = Math.Max(1, usableWidth / BlockSize);
+            int blocksY = Math.Max(1, usableHeight / BlockSize);
+            int total = blocksX * blocksY * BytesPerBlock;
             if (geometry.HeaderBytes > 0)
-            {
-                payloadBytesPerFrame = Math.Max(0, payloadBytesPerFrame - geometry.HeaderBytes);
-            }
-
-            return payloadBytesPerFrame;
+                total = Math.Max(0, total - geometry.HeaderBytes);
+            return total;
         }
 
         public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
@@ -47,223 +49,142 @@ namespace YTAHD.Core.Modulation
 
         public int GetPacketBufferLength(int width, int height, int headerBytes, int payloadBytesPerFrame, int bitsPerFrame, int macroblockSize = 0)
         {
-            _ = width;
-            _ = height;
-            _ = bitsPerFrame;
-            _ = macroblockSize;
+            _ = width; _ = height; _ = bitsPerFrame; _ = macroblockSize;
             return headerBytes + payloadBytesPerFrame;
         }
 
-        public int GetBorderWidth(ModulatorGeometry geometry)
-        {
-            _ = geometry;
-            return 32;
-        }
+        public int GetBorderWidth(ModulatorGeometry geometry) { _ = geometry; return 32; }
+        public int GetBorderWidth(int width, int height, int macroblockSize = 0) { _ = width; _ = height; _ = macroblockSize; return 32; }
 
-        public int GetBorderWidth(int width, int height, int macroblockSize = 0)
-        {
-            _ = width;
-            _ = height;
-            _ = macroblockSize;
-            return 32;
-        }
-
+        /// <summary>
+        /// Single-block encode: synthesise one 8×8 pixel block (64 flat bytes, row-major)
+        /// from the first byte of <paramref name="input"/> using IDCT.
+        /// </summary>
         public void Encode(ReadOnlySpan<byte> input, Span<byte> pixelBuffer)
         {
-            if (pixelBuffer.Length < BasisSize * BasisSize)
+            if (pixelBuffer.Length < BlockSize * BlockSize)
+                throw new ArgumentException("Pixel buffer too small for one 8×8 block.", nameof(pixelBuffer));
+
+            for (int py = 0; py < BlockSize; py++)
             {
-                throw new ArgumentException("Pixel buffer is too small to hold an 8x8 DCT carrier block.", nameof(pixelBuffer));
-            }
-
-            pixelBuffer.Clear();
-
-            var basis = DctCarrierBasis.GenerateBasis(BasisSize, Cutoff);
-            int payloadCount = Math.Min(input.Length, Cutoff * Cutoff);
-
-            for (int i = 0; i < payloadCount; i++)
-            {
-                int y = i / Cutoff;
-                int x = i % Cutoff;
-                if (Math.Abs(basis[y, x]) < 0.0001d)
+                for (int px = 0; px < BlockSize; px++)
                 {
-                    continue;
+                    pixelBuffer[py * BlockSize + px] = ComputeIdctPixel(input, bitBase: 0, px, py);
                 }
-
-                pixelBuffer[y * BasisSize + x] = input[i];
             }
+        }
 
-            for (int y = 0; y < BasisSize; y++)
+        /// <summary>
+        /// Single-block decode: recover the first byte of payload from an 8×8 pixel block
+        /// (64 flat bytes, row-major) by applying forward DCT and reading coefficient signs.
+        /// </summary>
+        public void Decode(ReadOnlySpan<byte> pixelBuffer, Span<byte> output)
+        {
+            if (output.IsEmpty) return;
+            DebugTrace.Log("DctModulator", $"Decode: pixelBufferLen={pixelBuffer.Length} outputLen={output.Length}");
+            output.Clear();
+
+            var carriers = DctCarrierBasis.CarrierPositions;
+            var cos = DctCarrierBasis.CosTable;
+            int bitsToRecover = Math.Min(output.Length * 8, carriers.Length);
+
+            for (int ci = 0; ci < bitsToRecover; ci++)
             {
-                for (int x = 0; x < BasisSize; x++)
-                {
-                    if (x < Cutoff && y < Cutoff)
-                    {
-                        continue;
-                    }
+                var (u, v) = carriers[ci];
+                double sum = 0;
+                for (int py = 0; py < BlockSize; py++)
+                    for (int px = 0; px < BlockSize; px++)
+                        sum += pixelBuffer[py * BlockSize + px] * cos[px, u] * cos[py, v];
 
-                    pixelBuffer[y * BasisSize + x] = 128;
-                }
+                double coeff = DctCarrierBasis.C(u) * DctCarrierBasis.C(v) / 4.0 * sum;
+                int bit = coeff > 0 ? 1 : 0;
+                int bytePos = ci / 8;
+                int bitPos = 7 - (ci % 8);
+                output[bytePos] = (byte)(output[bytePos] | (bit << bitPos));
             }
         }
 
         public byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
-        {
-            return CreatePhase3Frame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
-        }
+            => CreatePhase3Frame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
 
         public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
-        {
-            return CreatePhase3Frame(width, height, borderWidth, payload);
-        }
+            => CreatePhase3Frame(width, height, borderWidth, payload);
 
+        /// <summary>
+        /// Synthesise a full frame: each 8×8 block carries 8 payload bits via IDCT.
+        /// The border region is filled with neutral gray (128).  Active blocks are smooth
+        /// cosine-wave gradients — low-frequency signal that video codecs preserve well.
+        /// </summary>
         public static byte[] CreatePhase3Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
         {
             if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
             if (borderWidth < 0 || borderWidth > Math.Min(width, height) / 2) throw new ArgumentOutOfRangeException(nameof(borderWidth));
 
             var frame = new byte[width * height * 4];
-            for (int y = 0; y < height; y++)
+
+            // Fill entire frame with neutral gray (border + padding between blocks)
+            for (int i = 0; i < frame.Length; i += 4)
             {
-                for (int x = 0; x < width; x++)
-                {
-                    int idx = (y * width + x) * 4;
-                    bool onBorder = x < borderWidth || x >= width - borderWidth || y < borderWidth || y >= height - borderWidth;
-                    byte neutral = onBorder ? (byte)128 : (byte)0;
-                    frame[idx + 0] = neutral;
-                    frame[idx + 1] = neutral;
-                    frame[idx + 2] = neutral;
-                    frame[idx + 3] = 255;
-                }
+                frame[i] = 128; frame[i + 1] = 128; frame[i + 2] = 128; frame[i + 3] = 255;
             }
 
-            int payloadIndex = 0;
-            int blockSize = 8;
-            int carrierX = borderWidth + 8;
-            int carrierY = borderWidth + 8;
+            int payloadBitIndex = 0;
+            int totalBits = payload.Length * 8;
 
-            for (int blockY = 0; blockY < height - borderWidth * 2 && payloadIndex < payload.Length; blockY += blockSize)
+            for (int blockY = 0; blockY + BlockSize <= height - borderWidth * 2; blockY += BlockSize)
             {
-                for (int blockX = 0; blockX < width - borderWidth * 2 && payloadIndex < payload.Length; blockX += blockSize)
+                for (int blockX = 0; blockX + BlockSize <= width - borderWidth * 2; blockX += BlockSize)
                 {
-                    int x = borderWidth + blockX;
-                    int y = borderWidth + blockY;
-                    if (x + blockSize > width || y + blockSize > height)
-                    {
-                        continue;
-                    }
+                    if (payloadBitIndex >= totalBits) break;
+                    int bx = borderWidth + blockX;
+                    int by = borderWidth + blockY;
 
-                    var payloadSlice = payload.Slice(payloadIndex, Math.Min(payload.Length - payloadIndex, Cutoff * Cutoff));
-                    for (int yy = 0; yy < blockSize; yy++)
+                    for (int py = 0; py < BlockSize; py++)
                     {
-                        for (int xx = 0; xx < blockSize; xx++)
+                        for (int px = 0; px < BlockSize; px++)
                         {
-                            int idx = ((y + yy) * width + (x + xx)) * 4;
-                            double distanceFromCarrier = double.MaxValue;
-                            if (yy < Cutoff && xx < Cutoff)
-                            {
-                                distanceFromCarrier = 0.0d;
-                            }
-                            else
-                            {
-                                int centerX = Cutoff / 2;
-                                int centerY = Cutoff / 2;
-                                distanceFromCarrier = Math.Sqrt((xx - centerX) * (xx - centerX) + (yy - centerY) * (yy - centerY));
-                            }
-
-                            byte neutral = 0;
-                            if (yy < Cutoff && xx < Cutoff)
-                            {
-                                int payloadIndexInBlock = (yy * Cutoff) + xx;
-                                if (payloadIndexInBlock < payloadSlice.Length)
-                                {
-                                    neutral = payloadSlice[payloadIndexInBlock];
-                                }
-                                else
-                                {
-                                    neutral = 0;
-                                }
-                            }
-
-                            frame[idx + 0] = neutral;
-                            frame[idx + 1] = neutral;
-                            frame[idx + 2] = neutral;
-                            frame[idx + 3] = 255;
+                            byte pv = ComputeIdctPixel(payload, payloadBitIndex, px, py);
+                            int idx = ((by + py) * width + (bx + px)) * 4;
+                            frame[idx] = pv; frame[idx + 1] = pv; frame[idx + 2] = pv; frame[idx + 3] = 255;
                         }
                     }
 
-                    payloadIndex += payloadSlice.Length;
+                    payloadBitIndex += DctCarrierBasis.CarrierPositions.Length;
                 }
+                if (payloadBitIndex >= totalBits) break;
             }
 
             return frame;
         }
 
-        public void Decode(ReadOnlySpan<byte> pixelBuffer, Span<byte> output)
+        // ── private helpers ──────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Evaluate the IDCT at pixel column <paramref name="px"/>, row <paramref name="py"/>
+        /// for an 8×8 block whose AC carriers are set from 8 payload bits at <paramref name="bitBase"/>.
+        /// DC is always 1024 → mean pixel 128.
+        /// </summary>
+        private static byte ComputeIdctPixel(ReadOnlySpan<byte> payload, int bitBase, int px, int py)
         {
-            if (output.IsEmpty)
+            var carriers = DctCarrierBasis.CarrierPositions;
+            var cos = DctCarrierBasis.CosTable;
+
+            // DC contribution: C(0)*C(0)/4 * DcCoeff = (1/√2)²/4 * 1024 = 0.5/4*1024 = 128
+            double value = 128.0;
+
+            for (int ci = 0; ci < carriers.Length; ci++)
             {
-                return;
+                var (u, v) = carriers[ci];
+                int totalBitIdx = bitBase + ci;
+                int bytePos = totalBitIdx / 8;
+                int bitPos = 7 - (totalBitIdx % 8);
+                int bit = bytePos < payload.Length ? (payload[bytePos] >> bitPos) & 1 : 0;
+                double amplitude = bit == 1 ? DctCarrierBasis.CarrierAmplitude : -DctCarrierBasis.CarrierAmplitude;
+                value += DctCarrierBasis.C(u) * DctCarrierBasis.C(v) / 4.0 * amplitude * cos[px, u] * cos[py, v];
             }
 
-            output.Clear();
-
-            var basis = DctCarrierBasis.GenerateBasis(BasisSize, Cutoff);
-            int payloadCount = Math.Min(output.Length, Cutoff * Cutoff);
-
-            var values = new double[payloadCount];
-            int validCount = 0;
-            double minValue = double.MaxValue;
-            double maxValue = double.MinValue;
-
-            for (int i = 0; i < payloadCount; i++)
-            {
-                int y = i / Cutoff;
-                int x = i % Cutoff;
-                if (Math.Abs(basis[y, x]) < 0.0001d)
-                {
-                    continue;
-                }
-
-                double sample = pixelBuffer[y * BasisSize + x];
-                values[i] = sample;
-                if (sample < minValue) minValue = sample;
-                if (sample > maxValue) maxValue = sample;
-                validCount++;
-            }
-
-            if (validCount == 0)
-            {
-                return;
-            }
-
-            if (Math.Abs(maxValue - minValue) < 0.0001d)
-            {
-                for (int i = 0; i < payloadCount; i++)
-                {
-                    int y = i / Cutoff;
-                    int x = i % Cutoff;
-                    if (Math.Abs(basis[y, x]) < 0.0001d)
-                    {
-                        continue;
-                    }
-
-                    output[i] = (byte)Math.Clamp(Math.Round(values[i]), 0, 255);
-                }
-                return;
-            }
-
-            for (int i = 0; i < payloadCount; i++)
-            {
-                int y = i / Cutoff;
-                int x = i % Cutoff;
-                if (Math.Abs(basis[y, x]) < 0.0001d)
-                {
-                    continue;
-                }
-
-                double normalized = ((values[i] - minValue) / (maxValue - minValue)) * 255d;
-                output[i] = (byte)Math.Clamp(Math.Round(normalized), 0, 255);
-            }
+            return (byte)Math.Clamp((int)Math.Round(value), 0, 255);
         }
     }
 }
+

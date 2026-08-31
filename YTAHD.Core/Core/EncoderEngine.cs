@@ -92,12 +92,15 @@ namespace YTAHD.Core.Core
             if (!File.Exists(inputFile))
                 throw new FileNotFoundException("Input file not found", inputFile);
 
+            DebugTrace.Log("EncoderEngine", $"Starting encode for '{inputFile}' => '{outputVideo}' width={_width} height={_height} fps={_fps} modulator={_modulator.GetType().Name} useDurability={_useDurabilityMatrix}");
+
             var data = await File.ReadAllBytesAsync(inputFile);
 
             var geometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, BitsPerFrame: 0);
             int borderWidth = _modulator.GetBorderWidth(geometry);
             geometry = geometry with { BorderWidth = borderWidth };
             int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(geometry);
+            DebugTrace.Log("EncoderEngine", $"Frame geometry: payloadBytesPerFrame={payloadBytesPerFrame} borderWidth={borderWidth} headerBytes={HeaderBytes}");
             if (payloadBytesPerFrame <= 0)
                 throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
 
@@ -127,12 +130,14 @@ namespace YTAHD.Core.Core
 
             using var ff = await _ffmpeg.StartAsync(outputVideo);
             var stdin = ff.StandardInput;
+            DebugTrace.Log("EncoderEngine", $"FFmpeg process started; totalDataFrames={totalDataFrames} totalFramesWritten target={totalFramesWritten}");
 
             async Task WriteFramePacketAsync(byte[] framePacket)
             {
                 var frameGeometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, borderWidth);
                 byte[] rgbaFrame = _modulator.CreateFrame(frameGeometry, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
                 byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
+                DebugTrace.Log("EncoderEngine", $"Writing packet length={framePacket.Length} rgba={rgbaFrame.Length} rgb={rgbFrame.Length} modulator={_modulator.GetType().Name}");
 
                 for (int rep = 0; rep < 3; rep++)
                 {
@@ -201,8 +206,10 @@ namespace YTAHD.Core.Core
                 catch { }
             }
 
+            DebugTrace.Log("EncoderEngine", $"Encoder loop finished. Waiting for ffmpeg exit; outputVideo='{outputVideo}'");
             await ff.WaitForExitAsync();
             int actualFramesInVideo = await GetActualVideoFrameCountAsync(outputVideo);
+            DebugTrace.Log("EncoderEngine", $"ffmpeg exited. actualFramesInVideo={actualFramesInVideo} totalFramesWritten={totalFramesWritten}");
             LastEncodeMetrics = new EncodeMetrics
             {
                 InputPayloadBytes = data.Length,

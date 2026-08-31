@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
 namespace YTAHD.Core.Core
@@ -41,6 +42,8 @@ namespace YTAHD.Core.Core
         {
             if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
+
+            DebugTrace.Log("DecodeStreamOrchestrator", $"ProcessAsync start expectedOutputBytes={expectedOutputBytes} useDurability={_useDurabilityMatrix} modulator={_modulator.GetType().Name}");
 
             var geometry = new ModulatorGeometry(_width, _height, _macroblockSize, FramePacket.HeaderBytes, BitsPerFrame: 0);
             int borderWidth = _modulator.GetBorderWidth(geometry);
@@ -143,6 +146,7 @@ namespace YTAHD.Core.Core
                 return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
             }
 
+            int legacyFrameIndex = 0;
             while (true)
             {
                 int read = 0;
@@ -155,11 +159,14 @@ namespace YTAHD.Core.Core
 
                 if (read < frameBytes) break;
 
+                legacyFrameIndex++;
                 metrics.TotalFramesSeen++;
+                DebugTrace.Log("DecodeStreamOrchestrator", $"Read frame #{legacyFrameIndex} ({read} bytes) for legacy decode path. invalid packets so far={metrics.InvalidPacketCount}");
 
                 if (!DecoderEngine.TryReadDecodedPacket(frameBufLegacy, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
                 {
                     metrics.InvalidPacketCount++;
+                    DebugTrace.Log("DecodeStreamOrchestrator", $"Invalid packet on frame #{legacyFrameIndex}; invalidPacketCount={metrics.InvalidPacketCount}");
                     continue;
                 }
 
@@ -176,6 +183,7 @@ namespace YTAHD.Core.Core
 
                 if (DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes))
                 {
+                    DebugTrace.Log("DecodeStreamOrchestrator", $"Stopping decode after frame #{legacyFrameIndex}; accumulator bytes={accumulator.TotalDataFrames} expected={expectedOutputBytes}");
                     break;
                 }
             }
