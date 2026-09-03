@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install FFmpeg and native runtime deps
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libfontconfig1 libfreetype6
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Test
+        run: dotnet test YTAHD.Tests/YTAHD.Tests.csproj --configuration Release --no-restore --verbosity normal
+
+      - name: Publish Windows x64
+        run: dotnet publish YTAHD.Cli/YTAHD.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64 -p:PublishSingleFile=true -p:DebugType=None
+
+      - name: Publish Linux x64
+        run: dotnet publish YTAHD.Cli/YTAHD.Cli.csproj --configuration Release --runtime linux-x64 --self-contained true --output publish/linux-x64 -p:PublishSingleFile=true -p:DebugType=None
+
+      - name: Package release binaries
+        run: |
+          mkdir -p release
+          zip -j "release/ytahd-${GITHUB_REF_NAME}-win-x64.zip" publish/win-x64/YTAHD.Cli.exe
+          zip -j "release/ytahd-${GITHUB_REF_NAME}-linux-x64.zip" publish/linux-x64/YTAHD.Cli
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*.zip
