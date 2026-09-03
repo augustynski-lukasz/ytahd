@@ -30,10 +30,10 @@ jobs:
         run: dotnet test YTAHD.Tests/YTAHD.Tests.csproj --configuration Release --no-restore --verbosity normal
 
       - name: Publish Windows x64
-        run: dotnet publish YTAHD.Cli/YTAHD.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64 -p:PublishSingleFile=true -p:DebugType=None
+        run: dotnet publish YTAHD.Cli/YTAHD.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output publish/win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None
 
       - name: Publish Linux x64
-        run: dotnet publish YTAHD.Cli/YTAHD.Cli.csproj --configuration Release --runtime linux-x64 --self-contained true --output publish/linux-x64 -p:PublishSingleFile=true -p:DebugType=None
+        run: dotnet publish YTAHD.Cli/YTAHD.Cli.csproj --configuration Release --runtime linux-x64 --self-contained true --output publish/linux-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None
 
       - name: Package release binaries
         run: |
