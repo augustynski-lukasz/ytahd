@@ -93,13 +93,25 @@ docs/
 
 ### When to create an ADR
 
-**Always create an ADR file alongside your commit** for:
+An ADR records a decision **at the moment it is made** — not only after implementation.
+
+- **Design-time ADR (`Status: Accepted`):** when a non-trivial design or architectural
+  direction is decided before implementation starts, create the ADR immediately. It may be
+  committed on its own. When the implementation lands, update the same ADR in that commit
+  (`Status → Implemented`, consequences refreshed with what actually happened).
+- **Implementation ADR (`Status: Implemented`):** for work done without a prior design ADR,
+  create the ADR in the same commit as the code.
+
+Always have an ADR (design-time or implementation) for:
 
 - Any phase or feature implementation (`F-YYYYMMDD-NN`)
 - Any technical debt resolution (`TD-YYYYMMDD-NN`)
 - Any non-trivial fix, refactor, or architectural decision (`CR-YYYYMMDD-NN`)
 
 Trivial changes (typo fixes, copy changes, version bumps) do not need an ADR.
+
+Design decisions must not accumulate in `BACKLOG.md` or plan documents — the backlog holds
+the open item and links to the ADR; the ADR holds the decision.
 
 ### ADR file naming
 
@@ -120,7 +132,7 @@ For the ordinal `{NN}`: check the highest existing `{NN}` for the same prefix an
 ```markdown
 # {ID} — {Full Title}
 
-**Date:** YYYY-MM-DD **Status:** Resolved / Implemented
+**Date:** YYYY-MM-DD **Status:** Accepted / Implemented / Superseded
 **Area:** {files / subsystems affected}
 
 ## Context
@@ -136,6 +148,9 @@ What was decided and implemented.
 Impact, trade-offs, known limitations, follow-up items.
 ```
 
+Status lifecycle: `Accepted` (decision made, code not landed) → `Implemented` (code landed;
+update in the same commit as the code) → `Superseded` (link the replacing ADR).
+
 ### BACKLOG.md — open items
 
 - When starting new work on a backlog item, **do not modify `BACKLOG.md` yet** — wait until it's resolved.
@@ -145,6 +160,8 @@ Impact, trade-offs, known limitations, follow-up items.
 
 ### ADR must be in the same commit
 
-The ADR file **must be staged in the same commit as the code changes** — never as a follow-up commit.
+Implementation ADRs (and the `Accepted → Implemented` status update of a design-time ADR)
+**must be staged in the same commit as the code changes** — never as a follow-up commit.
+A design-time ADR with `Status: Accepted` may be committed on its own before any code exists.
 
 ---

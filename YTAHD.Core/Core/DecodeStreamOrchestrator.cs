@@ -132,18 +132,27 @@ namespace YTAHD.Core.Core
             byte[] frameBufLegacy = new byte[frameBytes];
             var duplicateTracker = new DuplicateFrameRunTracker();
             var metrics = new DecodeMetrics();
+            var frameBitDecoder = FrameBitDecoderFactory.CreateForModulator(_modulator);
 
             byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
             {
                 var packet = new byte[packetByteLength];
-                var strategy = FrameBitDecoderFactory.CreateForModulator(_modulator);
-                strategy.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
+                frameBitDecoder.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
                 return packet;
             }
 
             bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
             {
                 return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
+            }
+
+            void FlushPendingRun()
+            {
+                if (!duplicateTracker.HasCurrentRun) return;
+
+                metrics.DuplicateRunCount++;
+                metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
+                duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
             }
 
             int legacyFrameIndex = 0;
@@ -162,6 +171,22 @@ namespace YTAHD.Core.Core
                 legacyFrameIndex++;
                 metrics.TotalFramesSeen++;
                 DebugTrace.Log("DecodeStreamOrchestrator", $"Read frame #{legacyFrameIndex} ({read} bytes) for legacy decode path. invalid packets so far={metrics.InvalidPacketCount}");
+
+                // Canonical separator frames (Phase 4) mark a datagram boundary; they carry no
+                // payload of their own and must not be counted as invalid/corrupted packets.
+                if (frameBitDecoder.IsCanonicalFrame(frameBufLegacy, _width, _height, borderWidth))
+                {
+                    metrics.CanonicalFrameCount++;
+                    FlushPendingRun();
+
+                    if (DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes))
+                    {
+                        DebugTrace.Log("DecodeStreamOrchestrator", $"Stopping decode after canonical frame #{legacyFrameIndex}; accumulator bytes={accumulator.TotalDataFrames} expected={expectedOutputBytes}");
+                        break;
+                    }
+
+                    continue;
+                }
 
                 if (!DecoderEngine.TryReadDecodedPacket(frameBufLegacy, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
                 {

@@ -367,6 +367,63 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task RealFfmpeg_LargerPayloadMatrix_RoundTrips_For_Phase4()
+        {
+            await RunRealFfmpegMatrixRoundTripAsync("phase4", new MotionVectorModulator(), 16, 64, 256);
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_MotionVectorModulator_SingleFrame_RoundTrip_DoesNotHang()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the Phase 4 real-frame regression test.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[16];
+                new Random(4201).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var service = new YtahdCodecService(new MotionVectorModulator(), new DefaultFFmpegWrapperFactory(ffmpegPath));
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                await service.DecodeAsync(new DecodeOptions
+                {
+                    InputVideo = outputVideo,
+                    OutputFile = outputFile,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
+            }
+        }
+
+        [Fact]
         public async Task RealFfmpeg_DctModulator_SingleFrame_RoundTrip_DoesNotHang()
         {
             var ffmpegPath = GetAvailableFfmpegPath();

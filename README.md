@@ -1,12 +1,55 @@
 # YouTube as a Hard Drive (YTAHD) - Binary to Video Pipeline
 
+[Buy me a coffee](https://buymeacoffee.com/augustynskh)
+
 ## Project Layout
 
 - `YTAHD.Core` - reusable encoding/decoding library (engines, modulation, ffmpeg abstractions, audio helpers)
+
 - `YTAHD.Cli` - command-line host application built on top of `YTAHD.Core`
 - `probe` - quick real-FFmpeg smoke test across the main modulator modes
 - `YTAHD.Tests` - unit/integration tests for core functionality
 - `YTAHD.Perf` - performance and overhead analysis tool for comparing algorithms
+
+## CLI Usage
+
+Run commands from the repository root. The CLI resolves `ffmpeg` from `PATH` by default.
+
+```powershell
+dotnet run --project YTAHD.Cli -- encode input.bin output.mp4 --modulator phase3
+dotnet run --project YTAHD.Cli -- decode output.mp4 recovered.bin --modulator phase3
+```
+
+Use the same `--modulator` value for encoding and decoding. Available modes are `phase1`,
+`phase2`, `phase3`, and `phase4`; the default is `phase1`. `phase4` (motion-vector
+modulation) is implemented and validated against a real libx264 round trip (see
+`docs/decisions/F-20260903-01-phase4-motion-vector-design.md`).
+
+### Encode
+
+```text
+dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
+```
+
+| Option                    | Default       | Description                                                 |
+| ------------------------- | ------------- | ----------------------------------------------------------- |
+| `--macroblock-size`, `-m` | `16`          | Macroblock size in pixels.                                  |
+| `--width`, `-w`           | `3840`        | Output video width.                                         |
+| `--height`, `-H`          | `2160`        | Output video height.                                        |
+| `--fps`, `-r`             | `60`          | Output framerate.                                           |
+| `--modulator`, `-M`       | `phase1`      | Modulation mode: `phase1`, `phase2`, `phase3`, or `phase4`. |
+| `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe`.                              |
+
+### Decode
+
+```text
+dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
+```
+
+| Option              | Default       | Description                               |
+| ------------------- | ------------- | ----------------------------------------- |
+| `--modulator`, `-M` | `phase1`      | Modulation mode used to create the video. |
+| `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe`.            |
 
 ### Reusable Service API
 
@@ -53,7 +96,17 @@ The real FFmpeg pipeline is working and the lossy decoder has been hardened to t
 
 Phase 1 (monochrome binary grid) and Phase 2 (pseudo-QAM multi-channel) are the production-validated baselines. Phase 3 (DCT-domain carrier) is fully implemented: each 8×8 block is synthesised via IDCT from a DC term and 8 low-frequency AC carriers, and bits are recovered on decode by reading forward DCT coefficient signs. All three modulator paths pass the full test suite including real libx264 round-trip smoke checks. The Data Durability Matrix (parity-based symbol transport) is integrated into the service pipeline and verified under real FFmpeg output.
 
-The remaining backlog is maintenance and Phase 4 design work (`CHORE-010`, Phase 4 motion-vector research).
+Phase 4 (motion-vector modulation, absolute-displacement scheme — see ADR
+`F-20260903-01-phase4-motion-vector-design.md`) is implemented and wired into the encode/decode
+pipeline: a deterministic 8×8 tile texture is shifted per payload byte on displaced frames,
+alternating with canonical "no data" separator frames that mark datagram boundaries. Validated
+against a real libx264 (CRF-23) round trip with 100% payload recovery across single- and
+multi-frame payloads, in addition to the full unit-test suite (synthetic Gaussian noise, blur,
+luma shift, fake-FFmpeg pipeline round-trips). A 4×4/16×16 tile-size sweep remains a deferred
+tuning follow-up — see `docs/BACKLOG.md`.
+
+The remaining backlog is maintenance, Phase 4 perf/docs polish (`docs/PLAN.md` stage A6), and
+the audio FSK clock (workstream B).
 
 A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
 
@@ -178,7 +231,12 @@ where $W$, $H$ are frame dimensions and $B$ is the border width (default 32 px).
 
 ## 🔊 Audio-Assisted Clock Synchronization
 
-To prevent frame-dropping or frame-duplication errors from permanently desynchronizing the stream, an audio sub-carrier is implemented:
+> **Status: design only — not yet implemented.** `FskGenerator` currently emits silence as a
+> placeholder, the FFmpeg encode path strips audio (`-an`), and the decoder does not read an
+> audio track. See the backlog item “Audio-assisted clock synchronization (FSK datagram
+> clock)” for the implementation plan, including the combined motion-marker + FSK clock design.
+
+To prevent frame-dropping or frame-duplication errors from permanently desynchronizing the stream, an audio sub-carrier is planned:
 
 - **Sygnalization:** A continuous low-frequency Audio FSK (Frequency Shift Keying) tone loop utilizing resilient bands ($1000 \text{ Hz}$ and $1500 \text{ Hz}$).
 - **Operation:** At the exact frame a new visual datagram triggers, the audio instantly shifts to $1500 \text{ Hz}$ for exactly 1 frame duration, dropping back to $1000 \text{ Hz}$ during hold frames.
@@ -241,3 +299,7 @@ dotnet run --project YTAHD.Perf\YTAHD.Perf.csproj -- --payload-bytes 52428800 --
 - `--parity-group` data frames per parity frame for xor-parity
 - `--algorithm` `repeat` or `xor-parity`
 - `--compare` compare `repeat(x1)`, `repeat(xN)`, and `xor-parity`
+
+## License
+
+Licensed under the [MIT License](LICENSE).

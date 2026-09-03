@@ -106,6 +106,14 @@ internal sealed class PerfOptions
         string algorithm = ParseString(dict, "--algorithm", "xor-parity");
         string modulator = ParseString(dict, "--modulator", "phase1");
 
+        // Phase 4 emits 1 displaced + 1 canonical separator frame per logical frame instead
+        // of the legacy 3x repeat; only apply this default when the caller didn't ask for a
+        // specific repeat count.
+        if (!dict.ContainsKey("--repeat") && string.Equals(modulator, "phase4", StringComparison.OrdinalIgnoreCase))
+        {
+            repeatCount = 2;
+        }
+
         if (payloadBytes <= 0) throw new ArgumentException("--payload-bytes must be > 0.");
         if (width <= 0 || height <= 0) throw new ArgumentException("--width and --height must be > 0.");
         if (macroblockSize <= 0) throw new ArgumentException("--macroblock must be > 0.");
@@ -115,9 +123,10 @@ internal sealed class PerfOptions
         if (parityGroupSize <= 0) throw new ArgumentException("--parity-group must be > 0.");
         if (!string.Equals(modulator, "phase1", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(modulator, "phase2", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(modulator, "phase3", StringComparison.OrdinalIgnoreCase))
+            !string.Equals(modulator, "phase3", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(modulator, "phase4", StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException("--modulator must be one of: phase1, phase2, phase3.");
+            throw new ArgumentException("--modulator must be one of: phase1, phase2, phase3, phase4.");
         }
 
         return new PerfOptions
@@ -311,6 +320,8 @@ internal sealed class MetricsCalculator
                 CalculatePhase2PayloadBytesPerFrame(options),
             "phase3" =>
                 CalculatePhase3PayloadBytesPerFrame(options),
+            "phase4" =>
+                CalculatePhase4PayloadBytesPerFrame(options),
             _ => throw new ArgumentException($"Unsupported modulator '{options.Modulator}'.")
         };
     }
@@ -355,6 +366,26 @@ internal sealed class MetricsCalculator
             throw new ArgumentException("Phase 3 frame payload net bytes must be > 0. Lower header or increase frame capacity.");
 
         return payloadBytes;
+    }
+
+    private static int CalculatePhase4PayloadBytesPerFrame(PerfOptions options)
+    {
+        // Mirrors MotionVectorModulator: 8x8 texture + 16px guard margin per axis => 40px cells.
+        const int borderWidth = 32;
+        const int cellSize = 40;
+        int usableWidth = Math.Max(0, options.Width - borderWidth * 2);
+        int usableHeight = Math.Max(0, options.Height - borderWidth * 2);
+
+        int blocksX = usableWidth / cellSize;
+        int blocksY = usableHeight / cellSize;
+        if (blocksX <= 0 || blocksY <= 0)
+            throw new ArgumentException("Phase 4 carrier geometry is invalid for the requested frame size.");
+
+        int payloadBytes = blocksX * blocksY;
+        if (payloadBytes <= 0)
+            throw new ArgumentException("Frame payload net bytes must be > 0. Lower header or increase frame capacity.");
+
+        return Math.Max(0, payloadBytes - options.HeaderBytes);
     }
 
     private static double Percent(double part, double total)
@@ -450,7 +481,7 @@ internal static class PerfReportPrinter
         Console.WriteLine("  --repeat <n>           Physical repeat count per logical frame (default 3)");
         Console.WriteLine("  --parity-group <n>     Data frames per parity frame for xor-parity (default 4)");
         Console.WriteLine("  --algorithm <name>     repeat | xor-parity (default xor-parity)");
-        Console.WriteLine("  --modulator <name>     phase1 | phase2 | phase3 (default phase1)");
+        Console.WriteLine("  --modulator <name>     phase1 | phase2 | phase3 | phase4 (default phase1)");
         Console.WriteLine("  --compare true|false   Compare repeat(x1), repeat(xN), xor-parity (default false)");
         Console.WriteLine("  --help                 Show this help");
         Console.WriteLine();

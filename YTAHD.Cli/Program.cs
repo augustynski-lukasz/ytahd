@@ -11,10 +11,11 @@ static IModulator CreateModulator(string mode)
 {
     return mode.Trim().ToLowerInvariant() switch
     {
+        "phase4" or "motion" or "motion-vector" => new MotionVectorModulator(),
         "phase3" or "dct" or "dct-domain" => new DctModulator(),
         "phase2" or "pseudo-qam" or "qam" => new PseudoQamModulator(),
         "phase1" or "binary" or "grid" or "default" or "" => new BinaryGridModulator(),
-        _ => throw new ArgumentException($"Unsupported modulation mode '{mode}'. Use 'phase1', 'phase2', or 'phase3'.", nameof(mode))
+        _ => throw new ArgumentException($"Unsupported modulation mode '{mode}'. Use 'phase1', 'phase2', 'phase3', or 'phase4'.", nameof(mode))
     };
 }
 
@@ -36,7 +37,7 @@ var optMacro = new Option<int>(new[] { "--macroblock-size", "-m" }, () => 16, "M
 var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output video width");
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
-var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', or 'phase3'");
+var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
 var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
@@ -72,7 +73,7 @@ var decodeOut = new Argument<FileInfo>("output") { Arity = ArgumentArity.Exactly
 var decodeCommand = new Command("decode", "Decode a video back into a binary file");
 decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
-var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', or 'phase3'");
+var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
 var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);

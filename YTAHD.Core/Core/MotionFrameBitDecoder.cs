@@ -1,0 +1,183 @@
+using System;
+using YTAHD.Core.Modulation;
+
+namespace YTAHD.Core.Core
+{
+    /// <summary>
+    /// Decodes frames produced by <see cref="MotionVectorModulator"/>. Each cell's tile
+    /// position is located with a full search over the finite offset alphabet directly
+    /// against real frame pixels (luminance-averaged, tolerant of RGB drift like the other
+    /// decoders). <see cref="IsCanonicalFrame"/> is a separate classifier used by the
+    /// pipeline to detect "no data" frames before attempting packet decode.
+    /// </summary>
+    public sealed class MotionFrameBitDecoder : IFrameBitDecoder
+    {
+        private const int CellSize = MotionTileBasis.CellSize;
+        private const int TextureSize = MotionTileBasis.TextureSize;
+        private const int Guard = MotionTileBasis.MaxAbsOffsetPx;
+
+        public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
+        {
+            packet.Clear();
+
+            bool isRgba = frame.Length == width * height * 4;
+            int bytesPerPixel = isRgba ? 4 : 3;
+            int effectiveRowBytes = isRgba ? width * 4 : rowBytes;
+
+            int blocksX = Math.Max(1, (width - borderWidth * 2) / CellSize);
+            int blocksY = Math.Max(1, (height - borderWidth * 2) / CellSize);
+
+            int blockIndex = 0;
+            int totalBytes = packet.Length;
+
+            for (int blockY = 0; blockY < blocksY && blockIndex < totalBytes; blockY++)
+            {
+                for (int blockX = 0; blockX < blocksX && blockIndex < totalBytes; blockX++)
+                {
+                    int cellOriginX = borderWidth + blockX * CellSize;
+                    int cellOriginY = borderWidth + blockY * CellSize;
+
+                    var (dx, dy, _, _) = FindBestOffset(frame, width, height, bytesPerPixel, effectiveRowBytes, frameBytes, cellOriginX, cellOriginY, includeHome: false);
+                    if (MotionTileBasis.TryDecodeOffset(dx, dy, out byte value))
+                    {
+                        packet[blockIndex] = value;
+                    }
+
+                    blockIndex++;
+                }
+            }
+        }
+
+        /// <summary>Instance entry point used by the decode pipeline (see <see cref="IFrameBitDecoder"/>).</summary>
+        public bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth)
+            => IsCanonicalFrame(frame, width, height, borderWidth, canonicalFraction: 0.9);
+
+        /// <summary>
+        /// Classifies a decoded frame as canonical ("no data", every tile at home) by
+        /// checking, per cell, whether the home position fits the observed pixels better
+        /// than every alphabet data offset. Returns true when the fraction of home-dominant
+        /// cells reaches <paramref name="canonicalFraction"/>.
+        /// </summary>
+        public static bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth = 32, double canonicalFraction = 0.9)
+        {
+            bool isRgba = frame.Length == width * height * 4;
+            int bytesPerPixel = isRgba ? 4 : 3;
+            int effectiveRowBytes = isRgba ? width * 4 : width * bytesPerPixel;
+            int frameBytes = frame.Length;
+
+            int blocksX = Math.Max(1, (width - borderWidth * 2) / CellSize);
+            int blocksY = Math.Max(1, (height - borderWidth * 2) / CellSize);
+            int totalCells = blocksX * blocksY;
+            if (totalCells <= 0) return false;
+
+            int homeDominantCount = 0;
+            for (int blockY = 0; blockY < blocksY; blockY++)
+            {
+                for (int blockX = 0; blockX < blocksX; blockX++)
+                {
+                    int cellOriginX = borderWidth + blockX * CellSize;
+                    int cellOriginY = borderWidth + blockY * CellSize;
+
+                    var (dx, dy, _, _) = FindBestOffset(frame, width, height, bytesPerPixel, effectiveRowBytes, frameBytes, cellOriginX, cellOriginY, includeHome: true);
+                    if (MotionTileBasis.IsCanonicalOffset(dx, dy))
+                    {
+                        homeDominantCount++;
+                    }
+                }
+            }
+
+            return homeDominantCount / (double)totalCells >= canonicalFraction;
+        }
+
+        // ── private helpers ──────────────────────────────────────────────────────────
+
+        private static (int Dx, int Dy, long BestSad, long Margin) FindBestOffset(
+            ReadOnlySpan<byte> frame,
+            int width,
+            int height,
+            int bytesPerPixel,
+            int rowBytes,
+            int frameBytes,
+            int cellOriginX,
+            int cellOriginY,
+            bool includeHome)
+        {
+            var axisOffsets = MotionTileBasis.GetAxisOffsets();
+
+            long bestSad = long.MaxValue;
+            long secondBestSad = long.MaxValue;
+            int bestDx = 0, bestDy = 0;
+
+            void Consider(int candidateDx, int candidateDy, long sad)
+            {
+                if (sad < bestSad)
+                {
+                    secondBestSad = bestSad;
+                    bestSad = sad;
+                    bestDx = candidateDx;
+                    bestDy = candidateDy;
+                }
+                else if (sad < secondBestSad)
+                {
+                    secondBestSad = sad;
+                }
+            }
+
+            if (includeHome)
+            {
+                Consider(0, 0, ComputeCandidateSad(frame, width, height, bytesPerPixel, rowBytes, frameBytes, cellOriginX, cellOriginY, 0, 0));
+            }
+
+            foreach (int candidateDx in axisOffsets)
+            {
+                foreach (int candidateDy in axisOffsets)
+                {
+                    long sad = ComputeCandidateSad(frame, width, height, bytesPerPixel, rowBytes, frameBytes, cellOriginX, cellOriginY, candidateDx, candidateDy);
+                    Consider(candidateDx, candidateDy, sad);
+                }
+            }
+
+            return (bestDx, bestDy, bestSad, secondBestSad - bestSad);
+        }
+
+        private static long ComputeCandidateSad(
+            ReadOnlySpan<byte> frame,
+            int width,
+            int height,
+            int bytesPerPixel,
+            int rowBytes,
+            int frameBytes,
+            int cellOriginX,
+            int cellOriginY,
+            int candidateDx,
+            int candidateDy)
+        {
+            var texture = MotionTileBasis.Texture;
+            int windowX = cellOriginX + Guard + candidateDx;
+            int windowY = cellOriginY + Guard + candidateDy;
+
+            long sad = 0;
+            for (int py = 0; py < TextureSize; py++)
+            {
+                int y = windowY + py;
+                if (y < 0 || y >= height) { sad += TextureSize * 255; continue; }
+
+                for (int px = 0; px < TextureSize; px++)
+                {
+                    int x = windowX + px;
+                    int idx = y * rowBytes + x * bytesPerPixel;
+                    if (x < 0 || x >= width || idx + 2 >= frameBytes)
+                    {
+                        sad += 255;
+                        continue;
+                    }
+
+                    int luma = (frame[idx] + frame[idx + 1] + frame[idx + 2]) / 3;
+                    sad += Math.Abs(luma - texture[py, px]);
+                }
+            }
+
+            return sad;
+        }
+    }
+}

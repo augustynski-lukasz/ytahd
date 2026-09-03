@@ -11,7 +11,8 @@ var mods = new (string Name, IModulator Modulator)[]
 {
     ("phase1", new BinaryGridModulator()),
     ("phase2", new PseudoQamModulator()),
-    ("phase3", new DctModulator())
+    ("phase3", new DctModulator()),
+    ("phase4", new MotionVectorModulator())
 };
 foreach (var (name, mod) in mods)
 {

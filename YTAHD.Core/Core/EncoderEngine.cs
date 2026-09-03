@@ -139,9 +139,20 @@ namespace YTAHD.Core.Core
                 byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
                 DebugTrace.Log("EncoderEngine", $"Writing packet length={framePacket.Length} rgba={rgbaFrame.Length} rgb={rgbFrame.Length} modulator={_modulator.GetType().Name}");
 
-                for (int rep = 0; rep < 3; rep++)
+                var emission = _modulator as IFrameEmissionStrategy;
+                int repeatCount = emission?.RepeatCount ?? 3;
+                for (int rep = 0; rep < repeatCount; rep++)
                 {
                     await stdin.WriteAsync(rgbFrame, 0, rgbFrame.Length);
+                    await stdin.FlushAsync();
+                }
+
+                if (emission?.UsesCanonicalSeparator == true)
+                {
+                    byte[] canonicalRgba = _modulator.CreateFrame(frameGeometry, ReadOnlySpan<byte>.Empty);
+                    byte[] canonicalRgb = ConvertRgbaToRgb(canonicalRgba, _width, _height);
+                    DebugTrace.Log("EncoderEngine", $"Writing canonical separator frame modulator={_modulator.GetType().Name}");
+                    await stdin.WriteAsync(canonicalRgb, 0, canonicalRgb.Length);
                     await stdin.FlushAsync();
                 }
             }

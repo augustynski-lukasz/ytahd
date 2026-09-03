@@ -7,6 +7,13 @@ namespace YTAHD.Core.Core
     public interface IFrameBitDecoder
     {
         void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0);
+
+        /// <summary>
+        /// True if this frame is a "no data" marker that the pipeline should skip rather than
+        /// treat as an invalid/corrupted packet. Modulators without a separator concept never
+        /// produce one, so the default is always false.
+        /// </summary>
+        bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth) => false;
     }
 
     public static class FrameBitDecoderFactory
@@ -31,6 +38,11 @@ namespace YTAHD.Core.Core
             if (modulator is DctModulator)
             {
                 return new DctFrameBitDecoder();
+            }
+
+            if (modulator is MotionVectorModulator)
+            {
+                return new MotionFrameBitDecoder();
             }
 
             throw new NotSupportedException($"No frame bit decoder available for modulator '{modulator.GetType().Name}'.");
