@@ -5,6 +5,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using YTAHD.Core.Application;
+using YTAHD.Core.Audio;
 using YTAHD.Core.Modulation;
 using YTAHD.Core.Infrastructure;
 
@@ -24,6 +25,7 @@ namespace YTAHD.Core.Core
         private readonly int _fps;
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
+        private readonly bool _useAudioClock;
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
@@ -37,6 +39,7 @@ namespace YTAHD.Core.Core
             _fps = fps;
             _useDurabilityMatrix = false;
             _durabilityMatrixOptions = null;
+            _useAudioClock = false;
         }
 
         public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
@@ -44,6 +47,7 @@ namespace YTAHD.Core.Core
         {
             _useDurabilityMatrix = options.UseDurabilityMatrix;
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
+            _useAudioClock = options.UseAudioClock;
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -229,6 +233,23 @@ namespace YTAHD.Core.Core
             DebugTrace.Log("DecoderEngine", $"Starting decode for '{inputVideo}' => '{outputFile}' width={_width} height={_height} fps={_fps} modulator={_modulator.GetType().Name} useDurability={_useDurabilityMatrix}");
 
             var (width, height, fps) = await GetVideoMetadataAsync(inputVideo);
+
+            int? audioDatagramCount = null;
+            if (_useAudioClock)
+            {
+                var pcm = await _ffmpeg.TryExtractAudioPcmAsync(inputVideo);
+                if (pcm != null && pcm.Length > 0)
+                {
+                    var samples = GoertzelDetector.ToInt16Samples(pcm);
+                    audioDatagramCount = GoertzelDetector.DetectDatagramBoundaries(samples, FskGenerator.SampleRate, fps).Length;
+                    DebugTrace.Log("DecoderEngine", $"Audio clock detected {audioDatagramCount} datagram boundaries.");
+                }
+                else
+                {
+                    DebugTrace.Log("DecoderEngine", "Audio clock enabled but no audio track was found or extractable.");
+                }
+            }
+
             var ffmpegPath = _ffmpeg.ExecutablePath;
             if (string.IsNullOrWhiteSpace(ffmpegPath) || ffmpegPath.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
             {
@@ -246,7 +267,7 @@ namespace YTAHD.Core.Core
 
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode command: {ffmpegPath} {args}");
             using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start ffmpeg for decode.");
-            await DecodeFromRgbStreamAsync(process.StandardOutput.BaseStream, width, height, _macroblockSize, outputFile);
+            await DecodeFromRgbStreamAsync(process.StandardOutput.BaseStream, width, height, _macroblockSize, outputFile, audioDatagramCount);
             await process.WaitForExitAsync();
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode exited with code {process.ExitCode}.");
         }
@@ -255,18 +276,18 @@ namespace YTAHD.Core.Core
         /// Decode a raw RGB24 stream produced by the encoder into the original payload bytes.
         /// This helper is intended for tests that use a fake ffmpeg process which exposes raw RGB24 frames.
         /// </summary>
-        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile)
+        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile, int? audioDatagramCount = null)
         {
             var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize, _useDurabilityMatrix, _durabilityMatrixOptions);
-            var output = await orchestrator.ProcessAsync(rgbStream, expectedOutputBytes);
+            var output = await orchestrator.ProcessAsync(rgbStream, expectedOutputBytes, audioDatagramCount);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
         }
 
-        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, string outputFile)
+        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, string outputFile, int? audioDatagramCount = null)
         {
             var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize, _useDurabilityMatrix, _durabilityMatrixOptions);
-            var output = await orchestrator.ProcessAsync(rgbStream, 0);
+            var output = await orchestrator.ProcessAsync(rgbStream, 0, audioDatagramCount);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
         }

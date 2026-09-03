@@ -1,9 +1,10 @@
 # F-20260903-02 — Audio FSK Datagram Clock: Combined-Clock Design
 
-**Date:** 2026-09-03 **Status:** Accepted
-**Area:** `YTAHD.Core/Audio` (`FskGenerator`, new `GoertzelDetector`),
+**Date:** 2026-09-03 **Status:** Implemented
+**Area:** `YTAHD.Core/Audio` (`FskGenerator`, `GoertzelDetector`),
 `YTAHD.Core/Infrastructure` (`IFFmpegWrapper` audio mux/demux),
-`YTAHD.Core/Application` (`VideoCodecOptions.UseAudioClock`), `DecodeStreamOrchestrator`
+`YTAHD.Core/Application` (`VideoCodecOptions.UseAudioClock`), `EncoderEngine`,
+`DecoderEngine`, `DecodeStreamOrchestrator`, `DecodeMetrics.AudioDatagramCount`, `YTAHD.Cli`
 
 ## Context
 
@@ -48,3 +49,28 @@ Execution plan: `docs/PLAN.md`, workstream B (stages B1–B4) and combined clock
   cover the audio-enabled argument shape.
 - README's Audio-Assisted Clock Synchronization section was corrected to "design only" until
   this lands.
+
+### Real-codec validation (B1–B4)
+
+All four workstream B stages are implemented and tested (`docs/PLAN.md`). Real libx264+AAC
+round-trip results (`YTAHD.Tests/YtahdCodecServiceTests.cs`,
+`RealFfmpeg_AudioClock_DatagramCount_Matches_VideoLogicalFrameCount`, 16/64/256-byte
+payloads): the audio-derived datagram count matched the video logical frame count exactly
+in all measured runs on this ffmpeg build (`ffmpeg-20151019`), well within the ±2 frame
+tolerance budgeted for AAC priming delay. `-strict -2` is required to enable this build's
+experimental native AAC encoder.
+
+**Scope decisions made during implementation:**
+
+- **Phase 4/FSK cadence conflict confirmed.** Phase 4's 2-physical-frame-per-datagram
+  cadence leaves no room for a hold segment between pulses at the standard
+  `PulseDurationVideoFrames` — back-to-back pulses merge into one continuous tone, so only
+  the very first datagram boundary is detectable
+  (`GoertzelDetectorTests.DetectDatagramBoundaries_Handles_Phase4Style_BackToBack_Pulses`).
+  `EncoderEngine.WriteAudioClockTrackAsync` caps the pulse to fit the available span rather
+  than failing, but full Phase4+FSK combined-clock value requires either a shorter pulse
+  duration or widening Phase 4's cadence — tracked as a stage C1 follow-up.
+- **Erasure-recovery wiring deferred.** `DecodeMetrics.AudioDatagramCount` gives an
+  observable audio-vs-video datagram-count signal, but wiring a *disagreement* into actual
+  erasure indices for the durability/parity layer (as originally envisioned) is a deeper
+  integration left as a follow-up — see `docs/BACKLOG.md`.

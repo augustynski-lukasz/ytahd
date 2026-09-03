@@ -11,4 +11,10 @@ public class VideoCodecOptions
     public bool VerifyFfmpeg { get; init; } = true;
     public bool UseDurabilityMatrix { get; init; } = false;
     public DurabilityMatrixOptions? DurabilityMatrixOptions { get; init; }
+
+    /// <summary>
+    /// Adds an audio FSK datagram clock (see ADR F-20260903-02-audio-fsk-clock-design.md).
+    /// Optional end-to-end: decode of videos without an audio track is unaffected.
+    /// </summary>
+    public bool UseAudioClock { get; init; } = false;
 }

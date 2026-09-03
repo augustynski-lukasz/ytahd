@@ -25,11 +25,20 @@ configuration analysed for Phase 4), sub-pixel offset alphabet (½-px steps via 
 correlation), delta-chained offsets (previous-frame-relative, 1-frame lifespan). Blocked on
 the audio FSK combined-clock work (stage C1) landing first. Not started.
 
-## Audio-assisted clock synchronization (FSK datagram clock)
+## Audio FSK clock: erasure-recovery wiring (follow-up)
 
-Implement the audio FSK clock as a real optional transport feature. Design decided
-(≥2-frame phase-continuous pulses, Goertzel frequency-ratio detection, optional audio track,
-combined coarse/fine clock with Phase 4 motion markers) — see ADR
-`F-20260903-02-audio-fsk-clock-design.md`. Execution plan: `docs/PLAN.md`, workstream B
-(stages B1–B4) and combined clock stage C1. Current state: `FskGenerator` is a silence-only
-placeholder and the FFmpeg wrapper muxes no audio track. Not yet started.
+The audio FSK datagram clock is implemented and validated (ADR
+`F-20260903-02-audio-fsk-clock-design.md`, `Status: Implemented`): `DecodeMetrics` exposes
+`AudioDatagramCount` for comparison against the video-decoded logical frame count. Wiring an
+actual disagreement into erasure indices consumed by the parity/durability layer (the
+original "recover missing datagrams via the audio clock" ambition) is a deeper integration,
+deferred and not yet started.
+
+## Phase 4 / audio FSK cadence conflict (follow-up)
+
+Confirmed during audio FSK validation: Phase 4's 2-physical-frame-per-datagram cadence (see
+ADR `F-20260903-01-phase4-motion-vector-design.md`) leaves no room for a hold segment between
+pulses at the standard pulse duration, so only the first datagram boundary in a stream is
+audio-detectable (back-to-back pulses merge into one continuous tone). Needs either a shorter
+FSK pulse duration or a wider Phase 4 cadence to combine usefully — tracked as part of
+`docs/PLAN.md` stage C1. Not started.

@@ -11,6 +11,9 @@ namespace YTAHD.Core.Infrastructure
     /// </summary>
     public sealed class FFmpegWrapper : IFFmpegWrapper, IDisposable
     {
+        // Must match YTAHD.Core.Audio.FskGenerator.SampleRate.
+        private const int AudioSampleRate = 44100;
+
         private Process? _process;
         private readonly int _width;
         private readonly int _height;
@@ -50,7 +53,7 @@ namespace YTAHD.Core.Infrastructure
             }
         }
 
-        public async Task<IFFmpegProcess> StartAsync(string outputPath)
+        public async Task<IFFmpegProcess> StartAsync(string outputPath, string? audioPcmFilePath = null)
         {
             if (string.IsNullOrWhiteSpace(outputPath))
                 throw new ArgumentException("Output path is required.", nameof(outputPath));
@@ -66,7 +69,23 @@ namespace YTAHD.Core.Infrastructure
             // Use a container-compatible H.264 output for real mp4 smoke tests. The project keeps its
             // custom binary frame protocol and decoder tolerance; the real FFmpeg layer only needs a valid
             // codec/container pair so the encoded stream can be decoded back for end-to-end validation.
-            var args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
+            string args;
+            if (!string.IsNullOrWhiteSpace(audioPcmFilePath))
+            {
+                // Audio input is a second, already-fully-written raw PCM file (mono 16-bit,
+                // see AudioSampleRate) rather than a second stdin stream; ffmpeg only accepts
+                // one pipe input per process. -shortest trims either track to the shorter one
+                // in case audio/video duration rounding differs by a fraction of a frame.
+                // -strict -2 is required by some older ffmpeg builds where the native AAC
+                // encoder is still marked experimental.
+                args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - " +
+                       $"-f s16le -ar {AudioSampleRate} -ac 1 -i \"{audioPcmFilePath}\" " +
+                       $"-c:v libx264 -pix_fmt yuv420p -c:a aac -strict -2 -shortest \"{outputPath}\"";
+            }
+            else
+            {
+                args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
+            }
 
             var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)
             {
@@ -96,6 +115,42 @@ namespace YTAHD.Core.Infrastructure
             });
 
             return new ProcessWrapper(_process);
+        }
+
+        public async Task<byte[]?> TryExtractAudioPcmAsync(string inputVideo)
+        {
+            if (string.IsNullOrWhiteSpace(inputVideo) || !File.Exists(inputVideo))
+                return null;
+
+            try
+            {
+                var args = $"-v error -i \"{inputVideo}\" -vn -f s16le -ar {AudioSampleRate} -ac 1 -";
+                var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using var process = Process.Start(psi);
+                if (process == null) return null;
+
+                using var pcmStream = new MemoryStream();
+                var copyTask = process.StandardOutput.BaseStream.CopyToAsync(pcmStream);
+                var stderrTask = process.StandardError.ReadToEndAsync();
+                await Task.WhenAll(copyTask, process.WaitForExitAsync());
+                await stderrTask;
+
+                if (process.ExitCode != 0 || pcmStream.Length == 0)
+                    return null;
+
+                return pcmStream.ToArray();
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private class ProcessWrapper : IFFmpegProcess

@@ -39,6 +39,7 @@ dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
 | `--fps`, `-r`             | `60`          | Output framerate.                                           |
 | `--modulator`, `-M`       | `phase1`      | Modulation mode: `phase1`, `phase2`, `phase3`, or `phase4`. |
 | `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe`.                              |
+| `--audio-clock`           | `false`       | Mux an audio FSK datagram clock alongside the video.        |
 
 ### Decode
 
@@ -50,6 +51,7 @@ dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 | ------------------- | ------------- | ----------------------------------------- |
 | `--modulator`, `-M` | `phase1`      | Modulation mode used to create the video. |
 | `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe`.            |
+| `--audio-clock`     | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count. |
 
 ### Reusable Service API
 
@@ -231,16 +233,17 @@ where $W$, $H$ are frame dimensions and $B$ is the border width (default 32 px).
 
 ## 🔊 Audio-Assisted Clock Synchronization
 
-> **Status: design only — not yet implemented.** `FskGenerator` currently emits silence as a
-> placeholder, the FFmpeg encode path strips audio (`-an`), and the decoder does not read an
-> audio track. See the backlog item “Audio-assisted clock synchronization (FSK datagram
-> clock)” for the implementation plan, including the combined motion-marker + FSK clock design.
+> **Status: implemented, optional (default off).** Enable with `--audio-clock` on both encode
+> and decode (or `VideoCodecOptions.UseAudioClock`). See ADR
+> `docs/decisions/F-20260903-02-audio-fsk-clock-design.md` for the corrected design and
+> real-codec validation results.
 
-To prevent frame-dropping or frame-duplication errors from permanently desynchronizing the stream, an audio sub-carrier is planned:
+To prevent frame-dropping or frame-duplication errors from permanently desynchronizing the stream, an audio sub-carrier is available:
 
-- **Sygnalization:** A continuous low-frequency Audio FSK (Frequency Shift Keying) tone loop utilizing resilient bands ($1000 \text{ Hz}$ and $1500 \text{ Hz}$).
-- **Operation:** At the exact frame a new visual datagram triggers, the audio instantly shifts to $1500 \text{ Hz}$ for exactly 1 frame duration, dropping back to $1000 \text{ Hz}$ during hold frames.
-- **Decoding:** The C# application runs a lightweight Fast Fourier Transform (FFT) on the audio channel. A frequency spike acts as a hardware-like clock pulse, commanding the video tracker precisely when to sample a stable frame.
+- **Signalization:** A continuous Audio FSK (Frequency Shift Keying) tone loop utilizing resilient bands ($1000 \text{ Hz}$ hold and $1500 \text{ Hz}$ datagram-start pulse), phase-continuous and amplitude-ramped at segment edges to avoid clicks.
+- **Operation:** At the start of each logical (data/parity) frame, the audio shifts to $1500 \text{ Hz}$ for 2 video frames (long enough to survive AAC's 1024-sample frame size), then drops back to $1000 \text{ Hz}$ for the remaining hold frames.
+- **Decoding:** A two-bin Goertzel magnitude comparison (frequency ratio only, immune to loudness normalization) classifies each video-frame-aligned window as hold or pulse; rising edges mark datagram boundaries. The resulting count is exposed as `DecodeMetrics.AudioDatagramCount` for cross-checking against the video-decoded frame count — validated within a ±2 frame tolerance on a real libx264+AAC round trip.
+- **Known limitation:** Phase 4's fast 2-physical-frame-per-datagram cadence leaves no room for a hold gap between pulses, so only the first datagram boundary is currently audio-detectable in that mode (tracked in `docs/BACKLOG.md`).
 
 ---
 

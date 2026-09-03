@@ -16,6 +16,8 @@ namespace YTAHD.Tests
         public FakeFFmpegProcess? Process => _process;
         private FakeFFmpegProcess? _process;
         public string ExecutablePath => "ffmpeg";
+        public string? LastAudioPcmFilePath { get; private set; }
+        public byte[]? AudioPcmToReturn { get; set; }
 
         public FakeFFmpegWrapper(int width, int height, int fps)
         {
@@ -24,11 +26,14 @@ namespace YTAHD.Tests
 
         public Task<bool> IsAvailableAsync() => Task.FromResult(true);
 
-        public Task<IFFmpegProcess> StartAsync(string outputPath)
+        public Task<IFFmpegProcess> StartAsync(string outputPath, string? audioPcmFilePath = null)
         {
+            LastAudioPcmFilePath = audioPcmFilePath;
             _process = new FakeFFmpegProcess();
             return Task.FromResult<IFFmpegProcess>(_process);
         }
+
+        public Task<byte[]?> TryExtractAudioPcmAsync(string inputVideo) => Task.FromResult(AudioPcmToReturn);
     }
 
     internal sealed class FakeFFmpegWrapperFactory : IFFmpegWrapperFactory

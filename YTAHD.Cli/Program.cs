@@ -39,17 +39,29 @@ var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output 
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
 var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
 var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
+var optAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
 encodeCommand.AddOption(optFps);
 encodeCommand.AddOption(optModulator);
 encodeCommand.AddOption(optFfmpegPath);
+encodeCommand.AddOption(optAudioClock);
 
-encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockSize, int width, int height, int fps, string modulatorName, string? ffmpegPath) =>
+encodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
+    var input = ctx.ParseResult.GetValueForArgument(argIn);
+    var output = ctx.ParseResult.GetValueForArgument(argOut);
+    var macroblockSize = ctx.ParseResult.GetValueForOption(optMacro);
+    var width = ctx.ParseResult.GetValueForOption(optWidth);
+    var height = ctx.ParseResult.GetValueForOption(optHeight);
+    var fps = ctx.ParseResult.GetValueForOption(optFps);
+    var modulatorName = ctx.ParseResult.GetValueForOption(optModulator) ?? "phase1";
+    var ffmpegPath = ctx.ParseResult.GetValueForOption(optFfmpegPath);
+    var useAudioClock = ctx.ParseResult.GetValueForOption(optAudioClock);
+
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}] ");
+    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}] ");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     var payloadBytes = File.Exists(input.FullName) ? new FileInfo(input.FullName).Length : 0;
     await service.EncodeAsync(new EncodeOptions
@@ -60,13 +72,14 @@ encodeCommand.SetHandler(async (FileInfo input, FileInfo output, int macroblockS
         Width = width,
         Height = height,
         Fps = fps,
+        UseAudioClock = useAudioClock,
         VerifyFfmpeg = true
     });
 
     var metrics = service.LastEncodeMetrics;
     var actualVideoFrames = TryGetVideoFrameCount(output.FullName);
     Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}");
-}, argIn, argOut, optMacro, optWidth, optHeight, optFps, optModulator, optFfmpegPath);
+});
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
 var decodeOut = new Argument<FileInfo>("output") { Arity = ArgumentArity.ExactlyOne };
@@ -75,24 +88,27 @@ decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
 var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
 var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
+var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);
-decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName, string? ffmpegPath) =>
+decodeCommand.AddOption(decodeAudioClock);
+decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName, string? ffmpegPath, bool useAudioClock) =>
 {
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}]");
+    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}]");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     await service.DecodeAsync(new DecodeOptions
     {
         InputVideo = input.FullName,
         OutputFile = output.FullName,
+        UseAudioClock = useAudioClock,
         VerifyFfmpeg = true
     });
 
     var decodeMetrics = service.LastDecodeMetrics;
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}");
-}, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath);
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}");
+}, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath, decodeAudioClock);
 
 root.AddCommand(encodeCommand);
 root.AddCommand(decodeCommand);

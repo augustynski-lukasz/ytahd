@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using SkiaSharp;
 using YTAHD.Core.Application;
+using YTAHD.Core.Audio;
 using YTAHD.Core.Modulation;
 using YTAHD.Core.Infrastructure;
 
@@ -29,6 +30,7 @@ namespace YTAHD.Core.Core
         private readonly int _fps;
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
+        private readonly bool _useAudioClock;
 
         public EncodeMetrics LastEncodeMetrics { get; private set; } = new();
 
@@ -42,6 +44,7 @@ namespace YTAHD.Core.Core
             _fps = fps;
             _useDurabilityMatrix = false;
             _durabilityMatrixOptions = null;
+            _useAudioClock = false;
         }
 
         public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
@@ -49,6 +52,7 @@ namespace YTAHD.Core.Core
         {
             _useDurabilityMatrix = options.UseDurabilityMatrix;
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
+            _useAudioClock = options.UseAudioClock;
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -128,7 +132,23 @@ namespace YTAHD.Core.Core
                 TotalFramesInVideo = 0
             };
 
-            using var ff = await _ffmpeg.StartAsync(outputVideo);
+            string? audioPcmFilePath = null;
+            if (_useAudioClock)
+            {
+                int parityFrameCount = _useDurabilityMatrix ? 0 : (totalDataFrames + DataFramesPerParityGroup - 1) / DataFramesPerParityGroup;
+                int totalLogicalFrames = totalDataFrames + parityFrameCount;
+                var emissionForAudio = _modulator as IFrameEmissionStrategy;
+                int physicalFramesPerLogicalFrame = (emissionForAudio?.RepeatCount ?? 3) + (emissionForAudio?.UsesCanonicalSeparator == true ? 1 : 0);
+
+                audioPcmFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}_ytahd_audio.pcm");
+                await using (var pcmStream = new FileStream(audioPcmFilePath, FileMode.Create, FileAccess.Write))
+                {
+                    await WriteAudioClockTrackAsync(pcmStream, totalLogicalFrames, physicalFramesPerLogicalFrame, _fps);
+                }
+                DebugTrace.Log("EncoderEngine", $"Audio clock track written: '{audioPcmFilePath}' totalLogicalFrames={totalLogicalFrames} physicalFramesPerLogicalFrame={physicalFramesPerLogicalFrame}");
+            }
+
+            using var ff = await _ffmpeg.StartAsync(outputVideo, audioPcmFilePath);
             var stdin = ff.StandardInput;
             DebugTrace.Log("EncoderEngine", $"FFmpeg process started; totalDataFrames={totalDataFrames} totalFramesWritten target={totalFramesWritten}");
 
@@ -219,6 +239,12 @@ namespace YTAHD.Core.Core
 
             DebugTrace.Log("EncoderEngine", $"Encoder loop finished. Waiting for ffmpeg exit; outputVideo='{outputVideo}'");
             await ff.WaitForExitAsync();
+
+            if (audioPcmFilePath != null)
+            {
+                try { File.Delete(audioPcmFilePath); } catch { }
+            }
+
             int actualFramesInVideo = await GetActualVideoFrameCountAsync(outputVideo);
             DebugTrace.Log("EncoderEngine", $"ffmpeg exited. actualFramesInVideo={actualFramesInVideo} totalFramesWritten={totalFramesWritten}");
             LastEncodeMetrics = new EncodeMetrics
@@ -229,6 +255,31 @@ namespace YTAHD.Core.Core
                 TotalFramesWritten = totalFramesWritten,
                 TotalFramesInVideo = actualFramesInVideo > 0 ? actualFramesInVideo : totalFramesWritten
             };
+        }
+
+        /// <summary>
+        /// Writes the FSK datagram-clock audio track: a pulse at the start of each logical
+        /// frame followed by a hold tone for the rest of its physical-frame span. If a
+        /// modulator's physical-frame span is shorter than the standard pulse duration (e.g.
+        /// Phase 4's displaced+canonical pair), the pulse is capped to fit — the whole span
+        /// is pulse tone and there is no hold gap for that logical frame.
+        /// </summary>
+        public static async Task WriteAudioClockTrackAsync(Stream outStream, int totalLogicalFrames, int physicalFramesPerLogicalFrame, int fps)
+        {
+            if (totalLogicalFrames <= 0 || physicalFramesPerLogicalFrame <= 0) return;
+
+            var fsk = new FskGenerator();
+            int pulseFrames = Math.Min(FskGenerator.PulseDurationVideoFrames, physicalFramesPerLogicalFrame);
+            int holdFrames = physicalFramesPerLogicalFrame - pulseFrames;
+
+            for (int i = 0; i < totalLogicalFrames; i++)
+            {
+                await fsk.WritePulseAsync(outStream, fps, pulseFrames);
+                if (holdFrames > 0)
+                {
+                    await fsk.WriteHoldToneAsync(outStream, holdFrames, fps);
+                }
+            }
         }
     }
 }

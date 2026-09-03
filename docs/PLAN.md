@@ -99,14 +99,16 @@ is one commit with its ADR (`F-YYYYMMDD-NN` for A/B stages, per repo convention)
 
 ## Workstream B — Audio FSK clock (independent of A until C)
 
-### B1. Real FSK synthesis
+**Status: complete (B1–B4), 162/162 suite green throughout.**
+
+### B1. Real FSK synthesis — done
 
 - `FskGenerator`: phase-continuous 16-bit PCM tone segments aligned to fps
   (`WriteHoldToneAsync`, `WritePulseAsync`), amplitude-ramped transitions.
 - Tests: segment lengths, phase continuity at boundaries (no sample discontinuity),
   spectral check via Goertzel self-test.
 
-### B2. Audio mux/demux in the FFmpeg layer
+### B2. Audio mux/demux in the FFmpeg layer — done
 
 - `IFFmpegWrapper.StartAsync` gains an optional audio input (second pipe or temp WAV +
   `-i` + `-c:a aac`); remove `-an` only when audio is supplied.
@@ -115,20 +117,24 @@ is one commit with its ADR (`F-YYYYMMDD-NN` for A/B stages, per repo convention)
   `EncodeOptions`/`DecodeOptions` and CLI flag `--audio-clock`.
 - Tests: fake-wrapper arg assertions; real ffmpeg smoke check that mux+extract round-trips.
 
-### B3. Goertzel detector + pulse-to-frame alignment
+### B3. Goertzel detector + pulse-to-frame alignment — done (scoped)
 
-- New `YTAHD.Core/Audio/GoertzelDetector.cs`: 2-bin energy ratio per half-frame window,
+- New `YTAHD.Core/Audio/GoertzelDetector.cs`: 2-bin energy ratio per window,
   hysteresis, measured stream delay offset.
-- `DecodeStreamOrchestrator`: optional pulse train input → datagram counter; on video/audio
-  disagreement record erasure indices for the parity/durability layer instead of guessing.
-- Tests: detector on synthetic noisy PCM (AAC-like smearing simulated with lowpass +
-  resample), orchestrator erasure bookkeeping.
+- `DecodeStreamOrchestrator`/`DecoderEngine`: optional audio-derived datagram count
+  (`DecodeMetrics.AudioDatagramCount`) surfaced for comparison against the video-decoded
+  logical frame count. **Scope note:** wiring a disagreement into actual erasure indices for
+  the parity/durability layer (as originally envisioned) is deferred — see `docs/BACKLOG.md`.
+- Tests: detector on synthetic noisy PCM (lowpass-smeared), the documented Phase
+  4/FSK cadence conflict, orchestrator/`DecoderEngine` wiring.
 
-### B4. Real AAC round-trip validation
+### B4. Real AAC round-trip validation — done
 
-- libx264+AAC integration test: encode with pulses, decode audio, assert pulse count ==
-  datagram count and alignment within ±2 frames after delay compensation.
-- Exit gate + ADR documenting measured AAC priming delay and tolerance window.
+- libx264+AAC integration test (16/64/256-byte payloads): audio-derived datagram count
+  matched the video logical frame count exactly on this ffmpeg build, within the documented
+  ±2 frame tolerance. `-strict -2` required for this build's experimental AAC encoder.
+- Exit gate met; ADR `F-20260903-02-audio-fsk-clock-design.md` updated with findings
+  (now `Status: Implemented`).
 
 ---
 

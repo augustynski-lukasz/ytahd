@@ -38,7 +38,7 @@ namespace YTAHD.Core.Core
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
-        public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes)
+        public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null)
         {
             if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
@@ -121,7 +121,8 @@ namespace YTAHD.Core.Core
                     TotalDecodedPayloadBytes = decodedBytes,
                     TotalFramesDecoded = packets.Count,
                     TotalFramesSeen = packets.Count,
-                    RecoveredGroupCount = packets.Count
+                    RecoveredGroupCount = packets.Count,
+                    AudioDatagramCount = audioDatagramCount
                 };
 
                 return payload;
@@ -224,6 +225,7 @@ namespace YTAHD.Core.Core
             metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
             metrics.TotalDecodedPayloadBytes = resolvedExpectedBytes;
             metrics.TotalFramesDecoded = accumulator.TotalDataFrames;
+            metrics.AudioDatagramCount = audioDatagramCount;
             LastDecodeMetrics = metrics;
 
             return accumulator.AssembleOutput(resolvedExpectedBytes);

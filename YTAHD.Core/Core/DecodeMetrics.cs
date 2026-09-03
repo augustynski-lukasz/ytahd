@@ -13,6 +13,14 @@ namespace YTAHD.Core.Core
         public int TotalFramesDecoded { get; set; }
         public int CanonicalFrameCount { get; set; }
 
+        /// <summary>
+        /// Datagram count derived from the audio FSK clock (see ADR
+        /// F-20260903-02-audio-fsk-clock-design.md), or null if no audio track was present /
+        /// the audio clock was not used. A mismatch against <see cref="TotalFramesDecoded"/>
+        /// signals dropped or corrupted video frames the video-only pipeline didn't detect.
+        /// </summary>
+        public int? AudioDatagramCount { get; set; }
+
         public double InvalidPacketRatio => TotalFramesSeen > 0 ? InvalidPacketCount / (double)TotalFramesSeen : 0d;
     }
 

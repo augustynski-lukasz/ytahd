@@ -474,6 +474,170 @@ namespace YTAHD.Tests
             }
         }
 
+        [Theory]
+        [InlineData(16)]
+        [InlineData(64)]
+        [InlineData(256)]
+        public async Task RealFfmpeg_AudioClock_DatagramCount_Matches_VideoLogicalFrameCount(int payloadSize)
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the audio-clock real-codec test.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[payloadSize];
+                new Random(5152 + payloadSize).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var service = new YtahdCodecService(new BinaryGridModulator(), new DefaultFFmpegWrapperFactory(ffmpegPath));
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    UseAudioClock = true,
+                    VerifyFfmpeg = true
+                });
+                int expectedLogicalFrames = service.LastEncodeMetrics.TotalFramesWritten;
+
+                await service.DecodeAsync(new DecodeOptions
+                {
+                    InputVideo = outputVideo,
+                    OutputFile = outputFile,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    UseAudioClock = true,
+                    VerifyFfmpeg = true
+                });
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+
+                var audioDatagramCount = service.LastDecodeMetrics.AudioDatagramCount;
+                Assert.NotNull(audioDatagramCount);
+                // Real AAC re-encode introduces priming delay / frame smearing (see ADR
+                // F-20260903-02-audio-fsk-clock-design.md); tolerance matches its documented
+                // +-2 frame window rather than requiring exact equality.
+                Assert.True(Math.Abs(audioDatagramCount!.Value - expectedLogicalFrames) <= 2,
+                    $"Audio-derived datagram count {audioDatagramCount} vs video logical frame count {expectedLogicalFrames} exceeds the +-2 frame tolerance.");
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
+            }
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_AudioClock_MuxesAndExtracts_PcmAudioTrack()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the audio-clock real-codec test.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+            var outputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.out");
+
+            try
+            {
+                var payload = new byte[64];
+                new Random(5150).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var wrapperFactory = new DefaultFFmpegWrapperFactory(ffmpegPath);
+                var service = new YtahdCodecService(new BinaryGridModulator(), wrapperFactory);
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    UseAudioClock = true,
+                    VerifyFfmpeg = true
+                });
+
+                var decodeWrapper = wrapperFactory.CreateForDecode();
+                var pcm = await decodeWrapper.TryExtractAudioPcmAsync(outputVideo);
+                Assert.NotNull(pcm);
+                Assert.True(pcm!.Length > 0, "Expected a non-empty PCM audio track after muxing.");
+
+                // Decode must still succeed unaffected by the added audio track.
+                await service.DecodeAsync(new DecodeOptions
+                {
+                    InputVideo = outputVideo,
+                    OutputFile = outputFile,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                var decoded = await File.ReadAllBytesAsync(outputFile);
+                Assert.Equal(payload, decoded);
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+                if (File.Exists(outputFile)) File.Delete(outputFile);
+            }
+        }
+
+        [Fact]
+        public async Task RealFfmpeg_NoAudioClock_HasNoExtractableAudioTrack()
+        {
+            var ffmpegPath = GetAvailableFfmpegPath();
+            Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be present on PATH or a known local install path for the audio-clock real-codec test.");
+
+            var inputFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.bin");
+            var outputVideo = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+
+            try
+            {
+                var payload = new byte[64];
+                new Random(5151).NextBytes(payload);
+                await File.WriteAllBytesAsync(inputFile, payload);
+
+                var wrapperFactory = new DefaultFFmpegWrapperFactory(ffmpegPath);
+                var service = new YtahdCodecService(new BinaryGridModulator(), wrapperFactory);
+
+                await service.EncodeAsync(new EncodeOptions
+                {
+                    InputFile = inputFile,
+                    OutputVideo = outputVideo,
+                    Width = 640,
+                    Height = 480,
+                    MacroblockSize = 16,
+                    Fps = 30,
+                    VerifyFfmpeg = true
+                });
+
+                var decodeWrapper = wrapperFactory.CreateForDecode();
+                var pcm = await decodeWrapper.TryExtractAudioPcmAsync(outputVideo);
+                Assert.True(pcm == null || pcm.Length == 0, "Expected no audio track when UseAudioClock is disabled (the default).");
+            }
+            finally
+            {
+                if (File.Exists(inputFile)) File.Delete(inputFile);
+                if (File.Exists(outputVideo)) File.Delete(outputVideo);
+            }
+        }
+
         [Fact]
         public async Task RealFfmpeg_RoundTrip_EncodeDecode_Succeeds()
         {
