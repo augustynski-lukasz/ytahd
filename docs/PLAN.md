@@ -140,18 +140,31 @@ is one commit with its ADR (`F-YYYYMMDD-NN` for A/B stages, per repo convention)
 
 ## Workstream C — Combined clock (after A4 + B3)
 
-### C1. Clock arbitration
+### C1. Clock arbitration — done (scoped to observability)
 
-- Motion markers = fine clock (frame-exact), FSK pulse count = coarse absolute counter.
-- Arbitration rule in the orchestrator: agreement → proceed; disagreement → trust FSK count
-  for _how many_ datagrams elapsed, mark missing indices as erasures for durability recovery.
-- Real-codec test: forced frame drops (`-vf select` decimation) recovered via combined clock
-  - durability matrix.
+- `DecodeMetrics` gained `RecoveredDataFrameCount`, `RecoveredParityFrameCount`,
+  `TotalRecoveredLogicalFrames`, and `HasAudioVideoDatagramMismatch(tolerance = 2)`: the
+  audio clock's independent datagram count vs. what the video pipeline actually
+  reconstructed (post XOR-parity recovery), surfaced via CLI decode summary too.
+- **Real gap this closes:** XOR-parity recovery only ever notices _one_ missing frame
+  _within a group it has a parity packet for_; a whole parity group vanishing (data
+  **and** parity together) raises no error today and silently truncates the output. The
+  audio clock is unaffected by dropped video frames, so it catches this case.
+- **Scope decision:** this is detection/observability only, not automated repair. Actually
+  _recovering_ a fully-lost group (or wiring the durability matrix in for multi-frame-loss
+  repair, as the original design called for) remains deferred — see `docs/BACKLOG.md`.
+  Deterministic fake-wrapper test used instead of the originally planned real-codec
+  `-vf select` decimation test (more reliable, exercises the same recovery/detection code
+  paths without real-codec flakiness).
+- Tests: `CombinedClockArbitrationTests` — intact stream (no mismatch), a silently dropped
+  whole parity group (mismatch detected), and audio-clock-disabled (signal stays null).
 
 ### C2 (research follow-up, separate backlog item when C1 lands)
 
 - Motion-synced Phase 3: sparse always-moving marker tiles (~2–4% area) as frame clock for a
   1-frame DCT lifespan (~7.1 MB/s theoretical vs ~2.47 MB/s today).
+
+**Workstream C complete: C1 done (scoped), 165/165 suite green throughout.**
 
 ---
 

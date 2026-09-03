@@ -122,6 +122,7 @@ namespace YTAHD.Core.Core
                     TotalFramesDecoded = packets.Count,
                     TotalFramesSeen = packets.Count,
                     RecoveredGroupCount = packets.Count,
+                    RecoveredDataFrameCount = packets.Count,
                     AudioDatagramCount = audioDatagramCount
                 };
 
@@ -225,6 +226,8 @@ namespace YTAHD.Core.Core
             metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
             metrics.TotalDecodedPayloadBytes = resolvedExpectedBytes;
             metrics.TotalFramesDecoded = accumulator.TotalDataFrames;
+            metrics.RecoveredDataFrameCount = accumulator.OrderedPayload.Count;
+            metrics.RecoveredParityFrameCount = accumulator.ParityPayloadByGroup.Count;
             metrics.AudioDatagramCount = audioDatagramCount;
             LastDecodeMetrics = metrics;
 

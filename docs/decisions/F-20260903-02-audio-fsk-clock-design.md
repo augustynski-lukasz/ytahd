@@ -69,8 +69,11 @@ experimental native AAC encoder.
   (`GoertzelDetectorTests.DetectDatagramBoundaries_Handles_Phase4Style_BackToBack_Pulses`).
   `EncoderEngine.WriteAudioClockTrackAsync` caps the pulse to fit the available span rather
   than failing, but full Phase4+FSK combined-clock value requires either a shorter pulse
-  duration or widening Phase 4's cadence — tracked as a stage C1 follow-up.
-- **Erasure-recovery wiring deferred.** `DecodeMetrics.AudioDatagramCount` gives an
-  observable audio-vs-video datagram-count signal, but wiring a *disagreement* into actual
-  erasure indices for the durability/parity layer (as originally envisioned) is a deeper
-  integration left as a follow-up — see `docs/BACKLOG.md`.
+  duration or widening Phase 4's cadence — tracked as a `docs/BACKLOG.md` follow-up.
+- **Clock arbitration landed as detection, not automated repair (stage C1).**
+  `DecodeMetrics.HasAudioVideoDatagramMismatch()` compares the audio clock's datagram count
+  against `TotalRecoveredLogicalFrames` (actual data + parity frames reconstructed after
+  XOR recovery), catching the case XOR-parity alone cannot: a _whole_ parity group silently
+  dropped (data and parity together), which today truncates the output with no error.
+  Actually _recovering_ such a loss — e.g. by wiring the standalone durability-matrix
+  codec in as a stronger multi-erasure repair path — remains deferred; see `docs/BACKLOG.md`.

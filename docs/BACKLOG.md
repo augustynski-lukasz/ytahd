@@ -22,17 +22,18 @@ texture-size constants is a refactor across already-tested code, not yet done. N
 Tracked from `docs/PLAN.md` stage C2: motion-synced Phase 3 (sparse always-moving marker
 tiles as a per-frame clock enabling a 1-frame DCT lifespan — the highest-throughput
 configuration analysed for Phase 4), sub-pixel offset alphabet (½-px steps via phase
-correlation), delta-chained offsets (previous-frame-relative, 1-frame lifespan). Blocked on
-the audio FSK combined-clock work (stage C1) landing first. Not started.
+correlation), delta-chained offsets (previous-frame-relative, 1-frame lifespan). Stage C1
+(combined clock arbitration) has landed; not started.
 
-## Audio FSK clock: erasure-recovery wiring (follow-up)
+## Combined clock: multi-frame-loss repair (follow-up)
 
-The audio FSK datagram clock is implemented and validated (ADR
-`F-20260903-02-audio-fsk-clock-design.md`, `Status: Implemented`): `DecodeMetrics` exposes
-`AudioDatagramCount` for comparison against the video-decoded logical frame count. Wiring an
-actual disagreement into erasure indices consumed by the parity/durability layer (the
-original "recover missing datagrams via the audio clock" ambition) is a deeper integration,
-deferred and not yet started.
+Stage C1 (clock arbitration) is implemented: `DecodeMetrics.HasAudioVideoDatagramMismatch()`
+detects when the audio FSK clock's datagram count disagrees with what the video pipeline
+actually reconstructed (e.g. a whole parity group silently dropped, which XOR-parity alone
+cannot catch) — see ADR `F-20260903-02-audio-fsk-clock-design.md`. This is detection only.
+Actually _repairing_ such a loss — most plausibly by wiring the standalone durability-matrix
+codec in as a stronger multi-erasure repair path once a mismatch is flagged — is a deeper
+integration, deferred and not yet started.
 
 ## Phase 4 / audio FSK cadence conflict (follow-up)
 

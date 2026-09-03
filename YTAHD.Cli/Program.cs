@@ -107,7 +107,7 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulato
 
     var decodeMetrics = service.LastDecodeMetrics;
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}");
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}");
 }, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath, decodeAudioClock);
 
 root.AddCommand(encodeCommand);
