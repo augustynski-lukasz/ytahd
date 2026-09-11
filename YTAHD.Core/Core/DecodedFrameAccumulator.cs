@@ -19,7 +19,7 @@ namespace YTAHD.Core.Core
         public int RecoveredGroupCount { get; private set; }
 
         public bool TryAddDecodedFrame(
-            ReadOnlySpan<byte> frame,
+            ReadOnlyMemory<byte> frame,
             int width,
             int height,
             int macroblockSize,
@@ -36,7 +36,7 @@ namespace YTAHD.Core.Core
             var packet = new byte[framePacketBytes];
 
             var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
-            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
+            strategy.DecodeMemory(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 
             if (packet.Length < FramePacket.HeaderBytes)
             {
@@ -81,7 +81,7 @@ namespace YTAHD.Core.Core
         }
 
         public bool TryAddDecodedFrame(
-            ReadOnlySpan<byte> frame,
+            byte[] frame,
             int width,
             int height,
             int macroblockSize,

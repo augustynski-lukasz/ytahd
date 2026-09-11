@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using YTAHD.Core.Infrastructure;
@@ -40,6 +41,11 @@ namespace YTAHD.Core.Core
 
         public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null, int totalVideoFrames = 0, IProgress<DecodeProgress>? progress = null)
         {
+            var totalStopwatch = Stopwatch.StartNew();
+            double frameReadMilliseconds = 0d;
+            double packetDecodeMilliseconds = 0d;
+            double aggregationMilliseconds = 0d;
+
             if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
 
@@ -66,6 +72,7 @@ namespace YTAHD.Core.Core
                 byte[] frameBuf = new byte[frameBytes];
                 while (true)
                 {
+                    var readStopwatch = Stopwatch.StartNew();
                     int read = 0;
                     while (read < frameBytes)
                     {
@@ -73,16 +80,22 @@ namespace YTAHD.Core.Core
                         if (r == 0) break;
                         read += r;
                     }
+                    readStopwatch.Stop();
+                    frameReadMilliseconds += readStopwatch.Elapsed.TotalMilliseconds;
 
                     if (read < frameBytes) break;
                     progress?.Report(new DecodeProgress(packets.Count + 1, totalVideoFrames));
 
+                    var decodeStopwatch = Stopwatch.StartNew();
                     if (DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
                     {
                         packets.Add(packet);
                     }
+                    decodeStopwatch.Stop();
+                    packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
                 }
 
+                var aggregationStopwatch = Stopwatch.StartNew();
                 var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
                 var uniqueDataLengths = new Dictionary<(int GroupId, int SymbolId), int>();
                 foreach (var packet in packets)
@@ -116,6 +129,9 @@ namespace YTAHD.Core.Core
                 {
                     throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
                 }
+                aggregationStopwatch.Stop();
+                aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
+                totalStopwatch.Stop();
 
                 LastDecodeMetrics = new DecodeMetrics
                 {
@@ -124,7 +140,11 @@ namespace YTAHD.Core.Core
                     TotalFramesSeen = packets.Count,
                     RecoveredGroupCount = packets.Count,
                     RecoveredDataFrameCount = packets.Count,
-                    AudioDatagramCount = audioDatagramCount
+                    AudioDatagramCount = audioDatagramCount,
+                    TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds,
+                    FrameReadMilliseconds = frameReadMilliseconds,
+                    PacketDecodeMilliseconds = packetDecodeMilliseconds,
+                    AggregationMilliseconds = aggregationMilliseconds
                 };
 
                 return payload;
@@ -137,16 +157,23 @@ namespace YTAHD.Core.Core
             var metrics = new DecodeMetrics();
             var frameBitDecoder = FrameBitDecoderFactory.CreateForModulator(_modulator);
 
-            byte[] CreateLogicalSignature(ReadOnlySpan<byte> frame)
+            byte[] CreateLogicalSignature(byte[] frame)
             {
                 var packet = new byte[packetByteLength];
-                frameBitDecoder.Decode(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
+                var decodeStopwatch = Stopwatch.StartNew();
+                frameBitDecoder.DecodeMemory(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
+                decodeStopwatch.Stop();
+                packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
                 return packet;
             }
 
-            bool DecodePayloadFrame(ReadOnlySpan<byte> frame)
+            bool DecodePayloadFrame(byte[] frame)
             {
-                return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
+                var aggregationStopwatch = Stopwatch.StartNew();
+                var added = accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
+                aggregationStopwatch.Stop();
+                aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
+                return added;
             }
 
             void FlushPendingRun()
@@ -161,6 +188,7 @@ namespace YTAHD.Core.Core
             int legacyFrameIndex = 0;
             while (true)
             {
+                var readStopwatch = Stopwatch.StartNew();
                 int read = 0;
                 while (read < frameBytes)
                 {
@@ -168,6 +196,8 @@ namespace YTAHD.Core.Core
                     if (r == 0) break;
                     read += r;
                 }
+                readStopwatch.Stop();
+                frameReadMilliseconds += readStopwatch.Elapsed.TotalMilliseconds;
 
                 if (read < frameBytes) break;
 
@@ -178,7 +208,7 @@ namespace YTAHD.Core.Core
 
                 // Canonical separator frames (Phase 4) mark a datagram boundary; they carry no
                 // payload of their own and must not be counted as invalid/corrupted packets.
-                if (frameBitDecoder.IsCanonicalFrame(frameBufLegacy, _width, _height, borderWidth))
+                if (frameBitDecoder.IsCanonicalFrameMemory(frameBufLegacy, _width, _height, borderWidth))
                 {
                     metrics.CanonicalFrameCount++;
                     FlushPendingRun();
@@ -192,7 +222,11 @@ namespace YTAHD.Core.Core
                     continue;
                 }
 
-                if (!DecoderEngine.TryReadDecodedPacket(frameBufLegacy, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
+                var decodeStopwatch = Stopwatch.StartNew();
+                var packetIsValid = DecoderEngine.TryReadDecodedPacket(frameBufLegacy, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet);
+                decodeStopwatch.Stop();
+                packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
+                if (!packetIsValid)
                 {
                     metrics.InvalidPacketCount++;
                     DebugTrace.Log("DecodeStreamOrchestrator", $"Invalid packet on frame #{legacyFrameIndex}; invalidPacketCount={metrics.InvalidPacketCount}");
@@ -202,6 +236,7 @@ namespace YTAHD.Core.Core
                 var currentLogicalSignature = CreateLogicalSignature(frameBufLegacy);
                 int currentQuality = DecoderEngine.GetPacketQualityScore(packet);
 
+                var aggregationStopwatch = Stopwatch.StartNew();
                 var completedFrame = duplicateTracker.Update(frameBufLegacy, currentLogicalSignature, currentQuality);
                 if (completedFrame is not null)
                 {
@@ -210,13 +245,18 @@ namespace YTAHD.Core.Core
                     duplicateTracker.Flush(completedFrame, repeatedFrameCount, frame => DecodePayloadFrame(frame));
                 }
 
-                if (DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes))
+                var shouldStop = DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes);
+                aggregationStopwatch.Stop();
+                aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
+
+                if (shouldStop)
                 {
                     DebugTrace.Log("DecodeStreamOrchestrator", $"Stopping decode after frame #{legacyFrameIndex}; accumulator bytes={accumulator.TotalDataFrames} expected={expectedOutputBytes}");
                     break;
                 }
             }
 
+            var finalAggregationStopwatch = Stopwatch.StartNew();
             duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
 
             if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
@@ -231,6 +271,13 @@ namespace YTAHD.Core.Core
             metrics.RecoveredDataFrameCount = accumulator.OrderedPayload.Count;
             metrics.RecoveredParityFrameCount = accumulator.ParityPayloadByGroup.Count;
             metrics.AudioDatagramCount = audioDatagramCount;
+            finalAggregationStopwatch.Stop();
+            aggregationMilliseconds += finalAggregationStopwatch.Elapsed.TotalMilliseconds;
+            totalStopwatch.Stop();
+            metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
+            metrics.FrameReadMilliseconds = frameReadMilliseconds;
+            metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
+            metrics.AggregationMilliseconds = aggregationMilliseconds;
             LastDecodeMetrics = metrics;
 
             return accumulator.AssembleOutput(resolvedExpectedBytes);

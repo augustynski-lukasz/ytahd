@@ -37,6 +37,10 @@ namespace YTAHD.Tests
                 var output = await orchestrator.ProcessAsync(buffer, data.Length);
 
                 Assert.Equal(data, output);
+                Assert.True(orchestrator.LastDecodeMetrics.TotalElapsedMilliseconds > 0);
+                Assert.True(orchestrator.LastDecodeMetrics.FrameReadMilliseconds >= 0);
+                Assert.True(orchestrator.LastDecodeMetrics.PacketDecodeMilliseconds >= 0);
+                Assert.True(orchestrator.LastDecodeMetrics.AggregationMilliseconds >= 0);
             }
             finally
             {

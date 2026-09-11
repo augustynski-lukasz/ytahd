@@ -27,6 +27,11 @@ static int TryGetVideoFrameCount(string videoPath, string? ffmpegPath)
     return FFmpegProbe.GetVideoFrameCountAsync(videoPath, ffmpegPath).GetAwaiter().GetResult();
 }
 
+static string FormatMilliseconds(double milliseconds)
+{
+    return milliseconds.ToString("F1", CultureInfo.InvariantCulture);
+}
+
 static IProgress<DecodeProgress> CreateDecodeProgressReporter()
 {
     var lastReportedPercent = -1;
@@ -102,7 +107,7 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
 
     var metrics = service.LastEncodeMetrics;
     var actualVideoFrames = TryGetVideoFrameCount(output.FullName, ffmpegPath);
-    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}");
+    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}, timingMs={{total={FormatMilliseconds(metrics.TotalElapsedMilliseconds)}, packetBuild={FormatMilliseconds(metrics.PacketBuildMilliseconds)}, render={FormatMilliseconds(metrics.FrameRenderMilliseconds)}, rgb={FormatMilliseconds(metrics.RgbConversionMilliseconds)}, ffmpegWrite={FormatMilliseconds(metrics.FfmpegWriteMilliseconds)}}}");
 });
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -134,7 +139,7 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulato
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
     var totalVideoFrames = TryGetVideoFrameCount(input.FullName, ffmpegPath);
     var completionPercentage = totalVideoFrames > 0 ? Math.Min(100d, decodeMetrics.TotalFramesSeen * 100d / totalVideoFrames).ToString("F1", CultureInfo.InvariantCulture) + "%" : "n/a";
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}");
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
 }, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath, decodeAudioClock);
 
 root.AddCommand(encodeCommand);

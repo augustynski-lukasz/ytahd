@@ -92,6 +92,12 @@ namespace YTAHD.Core.Core
 
         public async Task EncodeAsync(string inputFile, string outputVideo)
         {
+            var totalStopwatch = Stopwatch.StartNew();
+            double packetBuildMilliseconds = 0d;
+            double frameRenderMilliseconds = 0d;
+            double rgbConversionMilliseconds = 0d;
+            double ffmpegWriteMilliseconds = 0d;
+
             if (!File.Exists(inputFile))
                 throw new FileNotFoundException("Input file not found", inputFile);
 
@@ -111,8 +117,11 @@ namespace YTAHD.Core.Core
             var framePackets = Array.Empty<byte[]>();
             if (_useDurabilityMatrix)
             {
+                var packetStopwatch = Stopwatch.StartNew();
                 var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
                 framePackets = durabilityCodec.EncodeToFramePackets(data).ToArray();
+                packetStopwatch.Stop();
+                packetBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
                 totalDataFrames = framePackets.Length;
             }
             else
@@ -154,25 +163,44 @@ namespace YTAHD.Core.Core
             async Task WriteFramePacketAsync(byte[] framePacket)
             {
                 var frameGeometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, borderWidth);
+                var renderStopwatch = Stopwatch.StartNew();
                 byte[] rgbaFrame = _modulator.CreateFrame(frameGeometry, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
+                renderStopwatch.Stop();
+                frameRenderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
+
+                var conversionStopwatch = Stopwatch.StartNew();
                 byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
+                conversionStopwatch.Stop();
+                rgbConversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
                 DebugTrace.Log("EncoderEngine", $"Writing packet length={framePacket.Length} rgba={rgbaFrame.Length} rgb={rgbFrame.Length} modulator={_modulator.GetType().Name}");
 
                 var emission = _modulator as IFrameEmissionStrategy;
                 int repeatCount = emission?.RepeatCount ?? 3;
                 for (int rep = 0; rep < repeatCount; rep++)
                 {
+                    var writeStopwatch = Stopwatch.StartNew();
                     await stdin.WriteAsync(rgbFrame, 0, rgbFrame.Length);
-                    await stdin.FlushAsync();
+                    writeStopwatch.Stop();
+                    ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
                 }
 
                 if (emission?.UsesCanonicalSeparator == true)
                 {
+                    renderStopwatch.Restart();
                     byte[] canonicalRgba = _modulator.CreateFrame(frameGeometry, ReadOnlySpan<byte>.Empty);
+                    renderStopwatch.Stop();
+                    frameRenderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
+
+                    conversionStopwatch.Restart();
                     byte[] canonicalRgb = ConvertRgbaToRgb(canonicalRgba, _width, _height);
+                    conversionStopwatch.Stop();
+                    rgbConversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
+
                     DebugTrace.Log("EncoderEngine", $"Writing canonical separator frame modulator={_modulator.GetType().Name}");
+                    var writeStopwatch = Stopwatch.StartNew();
                     await stdin.WriteAsync(canonicalRgb, 0, canonicalRgb.Length);
-                    await stdin.FlushAsync();
+                    writeStopwatch.Stop();
+                    ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
                 }
             }
 
@@ -196,6 +224,7 @@ namespace YTAHD.Core.Core
 
                         for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
                         {
+                            var packetStopwatch = Stopwatch.StartNew();
                             int frameIdx = groupStart + idxInGroup;
                             int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
                             var payload = new byte[payloadBytesPerFrame];
@@ -210,12 +239,17 @@ namespace YTAHD.Core.Core
                             }
 
                             var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
+                            packetStopwatch.Stop();
+                            packetBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
                             await WriteFramePacketAsync(framePacket);
                             totalFramesWritten++;
                             dataOffset += payloadLen;
                         }
 
+                        var parityStopwatch = Stopwatch.StartNew();
                         var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
+                        parityStopwatch.Stop();
+                        packetBuildMilliseconds += parityStopwatch.Elapsed.TotalMilliseconds;
                         await WriteFramePacketAsync(parityPacket);
                         totalFramesWritten++;
                     }
@@ -225,7 +259,10 @@ namespace YTAHD.Core.Core
             {
                 try
                 {
+                    var flushStopwatch = Stopwatch.StartNew();
                     await stdin.FlushAsync();
+                    flushStopwatch.Stop();
+                    ffmpegWriteMilliseconds += flushStopwatch.Elapsed.TotalMilliseconds;
                 }
                 catch { }
 
@@ -245,6 +282,7 @@ namespace YTAHD.Core.Core
             }
 
             int actualFramesInVideo = await GetActualVideoFrameCountAsync(outputVideo);
+            totalStopwatch.Stop();
             DebugTrace.Log("EncoderEngine", $"ffmpeg exited. actualFramesInVideo={actualFramesInVideo} totalFramesWritten={totalFramesWritten}");
             LastEncodeMetrics = new EncodeMetrics
             {
@@ -252,7 +290,12 @@ namespace YTAHD.Core.Core
                 PayloadBytesPerFrame = payloadBytesPerFrame,
                 TotalDataFrames = totalDataFrames,
                 TotalFramesWritten = totalFramesWritten,
-                TotalFramesInVideo = actualFramesInVideo > 0 ? actualFramesInVideo : totalFramesWritten
+                TotalFramesInVideo = actualFramesInVideo > 0 ? actualFramesInVideo : totalFramesWritten,
+                TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds,
+                PacketBuildMilliseconds = packetBuildMilliseconds,
+                FrameRenderMilliseconds = frameRenderMilliseconds,
+                RgbConversionMilliseconds = rgbConversionMilliseconds,
+                FfmpegWriteMilliseconds = ffmpegWriteMilliseconds
             };
         }
 

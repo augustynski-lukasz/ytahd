@@ -1,4 +1,4 @@
-# PLAN — Phase 4 (Motion Vector Modulation) + Audio FSK Clock + GPU Acceleration + Integrity
+# PLAN — Phase 4 (Motion Vector Modulation) + Audio FSK Clock + GPU Acceleration + Integrity + Parallelism
 
 **Date:** 2026-09-03 **Status:** Approved plan, not started
 **Design ADRs:** `F-20260903-01-phase4-motion-vector-design.md`,
@@ -314,6 +314,85 @@ payload is exactly the original payload.
 
 ---
 
+## Workstream F — Bounded parallel encode/decode pipeline
+
+**Status: accepted plan, F1–F3 complete; F4 not started.**
+**Design ADR:** `CR-20260911-06-bounded-parallel-pipeline-plan.md` (`Accepted`; flip to
+`Implemented` only when the ordered parallel pipeline lands).
+**Backlog items:** pipeline timing metrics, Phase 3/4 inner-loop parallelism, bounded ordered
+encode pipeline, bounded ordered decode pipeline, performance validation matrix.
+
+Goal: increase throughput without weakening the video protocol contract. FFmpeg pipe I/O
+stays ordered; CPU-heavy frame construction and frame decoding become parallel only behind
+bounded queues or independent per-frame/per-block work. Memory pressure is the primary safety
+constraint because one 4K RGB frame is about 24 MB and one 4K RGBA frame is about 33 MB.
+
+### F1. Timing instrumentation baseline — done
+
+- Encode/decode metrics extended with coarse timing buckets:
+  - total elapsed time;
+  - packet build / parity work;
+  - frame render;
+  - RGB conversion;
+  - FFmpeg pipe writes;
+  - FFmpeg frame reads;
+  - packet decode;
+  - ordered aggregation/recovery.
+- Timing summaries are surfaced in CLI output and existing metrics names remain stable.
+- This baseline can decide whether FFmpeg, modulation, conversion, or aggregation is the
+  current bottleneck for each modulator.
+- Tests: metric population on fake-wrapper encode/decode paths; CLI build stays green. See
+  ADR `CR-20260911-07-pipeline-timing-metrics.md`.
+
+### F2. Low-risk encode pipe cleanup — done
+
+- Removed per-physical-frame `FlushAsync()` calls and flush only before closing stdin.
+- Frame write order is unchanged.
+- Tests: fake-wrapper flush-count regression; real FFmpeg validation remains part of the
+  broader F6 matrix. See ADR `CR-20260911-08-encode-pipe-flush-cleanup.md`.
+
+### F3. Per-modulator inner-loop parallelism — done
+
+- Parallelize independent work inside heavy modulators before adding cross-frame queues:
+  - Phase 3 render by 8x8 block rows — done, see ADR
+    `CR-20260911-09-phase3-parallel-render.md`;
+  - Phase 3 decode by 8x8 block rows — done via `DecodeMemory`, see ADR
+    `CR-20260911-10-phase3-parallel-decode.md`;
+  - Phase 4 motion tile search by tile rows — done via `DecodeMemory` and
+    `IsCanonicalFrameMemory`, see ADR `CR-20260911-11-phase4-parallel-tile-search.md`;
+  - keep Phase 1/2 serial unless metrics show meaningful CPU cost.
+- Add a conservative degree-of-parallelism option with default `0`/auto and a serial fallback
+  for deterministic debugging in a follow-up tuning slice.
+- Tests: Phase 3 carrier/orchestrator regressions, Phase 4 motion/pipeline regressions; real
+  FFmpeg matrix remains part of F6.
+
+### F4. Bounded ordered encode pipeline
+
+- Split encode into packet producer, N render workers, and a single ordered FFmpeg writer.
+- Use bounded channels or an equivalent backpressure mechanism so at most a small number of
+  4K frames are resident at once.
+- Preserve logical frame order, physical repeat order, canonical separator placement, and
+  audio-clock cadence.
+- Tests: fake-wrapper order assertions, memory-bound stress test, real FFmpeg round trips.
+
+### F5. Bounded ordered decode pipeline
+
+- Split decode into a sequential FFmpeg stdout reader, N packet decode workers, and one
+  ordered aggregator.
+- Keep duplicate-run tracking, canonical separator handling, parity recovery, and output
+  assembly in the ordered aggregator.
+- Tests: duplicate/canonical sequencing, invalid-packet metrics, progress reporting, real
+  oversized Phase 3 recovery.
+
+### F6. Performance validation and tuning
+
+- Add benchmark modes or scripts for serial vs. parallel comparisons by modulator and payload
+  size.
+- Track throughput, CPU utilization, peak memory, FFmpeg wait time, and output correctness.
+- Tune default concurrency to avoid starving FFmpeg/libx264, which already uses CPU threads.
+
+---
+
 ## Sequencing
 
 ```mermaid
@@ -325,6 +404,7 @@ graph LR
     C1 --> C2
     C1 --> D1 --> D2 --> D3 --> D4 --> D5
     C1 --> E1 --> E2 --> E3 --> E4 --> E5
+    C1 --> F1 --> F2 --> F3 --> F4 --> F5 --> F6
 ```
 
 Recommended order for a single developer: A1→A2→A3 (pure library code, fast feedback),
@@ -332,6 +412,8 @@ then B1→B2 in parallel-friendly isolation, A4, B3, A5, B4, C1, A6. GPU acceler
 start only after the current CPU baseline stays green, then proceed D1→D5 with CPU defaults
 preserved at each step. Integrity hardening should proceed E1→E5 before relying on larger
 payload experiments, because it defines how the decoder proves recovered bytes are correct.
+Parallel pipeline work should start with F1 measurement, then apply the smallest concurrency
+change whose bottleneck is proven by metrics.
 
 ## Validation commands (per stage)
 

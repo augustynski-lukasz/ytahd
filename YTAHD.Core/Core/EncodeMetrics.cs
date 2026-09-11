@@ -7,5 +7,10 @@ namespace YTAHD.Core.Core
         public int TotalDataFrames { get; set; }
         public int TotalFramesWritten { get; set; }
         public int TotalFramesInVideo { get; set; }
+        public double TotalElapsedMilliseconds { get; set; }
+        public double PacketBuildMilliseconds { get; set; }
+        public double FrameRenderMilliseconds { get; set; }
+        public double RgbConversionMilliseconds { get; set; }
+        public double FfmpegWriteMilliseconds { get; set; }
     }
 }

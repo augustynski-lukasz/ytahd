@@ -125,6 +125,12 @@ namespace YTAHD.Tests
                 await engine.EncodeAsync(tmp, "out.mp4");
 
                 Assert.True(fake.WrittenBytes > 0);
+                Assert.Equal(1, fake.Process?.FlushCount);
+                Assert.True(engine.LastEncodeMetrics.TotalElapsedMilliseconds > 0);
+                Assert.True(engine.LastEncodeMetrics.PacketBuildMilliseconds >= 0);
+                Assert.True(engine.LastEncodeMetrics.FrameRenderMilliseconds >= 0);
+                Assert.True(engine.LastEncodeMetrics.RgbConversionMilliseconds >= 0);
+                Assert.True(engine.LastEncodeMetrics.FfmpegWriteMilliseconds >= 0);
             }
             finally
             {

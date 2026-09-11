@@ -1,4 +1,5 @@
 using System;
+using System.Security.Cryptography;
 using Xunit;
 using YTAHD.Core.Core;
 
@@ -54,8 +55,13 @@ namespace YTAHD.Tests
             packet[14] = (byte)((groupStart >> 8) & 0xFF);
             packet[15] = (byte)(groupStart & 0xFF);
             packet[16] = (byte)1;
-            packet[17] = (byte)((payloadLength >> 8) & 0xFF);
-            packet[18] = (byte)(payloadLength & 0xFF);
+            packet[17] = (byte)((payloadLength >> 24) & 0xFF);
+            packet[18] = (byte)((payloadLength >> 16) & 0xFF);
+            packet[19] = (byte)((payloadLength >> 8) & 0xFF);
+            packet[20] = (byte)(payloadLength & 0xFF);
+
+            var hash = SHA256.HashData(payload.AsSpan(0, payloadLength));
+            Buffer.BlockCopy(hash, 0, packet, 21, hash.Length);
 
             Array.Copy(payload, 0, packet, FramePacket.HeaderBytes, payload.Length);
         }

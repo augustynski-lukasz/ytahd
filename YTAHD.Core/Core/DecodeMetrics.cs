@@ -12,6 +12,10 @@ namespace YTAHD.Core.Core
         public int TotalDecodedPayloadBytes { get; set; }
         public int TotalFramesDecoded { get; set; }
         public int CanonicalFrameCount { get; set; }
+        public double TotalElapsedMilliseconds { get; set; }
+        public double FrameReadMilliseconds { get; set; }
+        public double PacketDecodeMilliseconds { get; set; }
+        public double AggregationMilliseconds { get; set; }
 
         /// <summary>
         /// Datagram count derived from the audio FSK clock (see ADR

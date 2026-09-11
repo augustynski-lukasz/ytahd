@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using YTAHD.Core.Modulation;
 
 namespace YTAHD.Core.Core
@@ -8,12 +9,18 @@ namespace YTAHD.Core.Core
     {
         void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0);
 
+        void DecodeMemory(ReadOnlyMemory<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Memory<byte> packet, int borderWidth = 0)
+            => Decode(frame.Span, width, height, macroblockSize, rowBytes, frameBytes, packet.Span, borderWidth);
+
         /// <summary>
         /// True if this frame is a "no data" marker that the pipeline should skip rather than
         /// treat as an invalid/corrupted packet. Modulators without a separator concept never
         /// produce one, so the default is always false.
         /// </summary>
         bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth) => false;
+
+        bool IsCanonicalFrameMemory(ReadOnlyMemory<byte> frame, int width, int height, int borderWidth)
+            => IsCanonicalFrame(frame.Span, width, height, borderWidth);
     }
 
     public static class FrameBitDecoderFactory
@@ -349,6 +356,63 @@ namespace YTAHD.Core.Core
                     }
                 }
             }
+        }
+
+        public void DecodeMemory(ReadOnlyMemory<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Memory<byte> packet, int borderWidth = 0)
+        {
+            packet.Span.Clear();
+
+            bool isRgba = frame.Length == width * height * 4;
+            int bytesPerPixel = isRgba ? 4 : 3;
+            int effectiveRowBytes = isRgba ? width * 4 : rowBytes;
+
+            int blocksX = Math.Max(1, (width - borderWidth * 2) / BlockSize);
+            int blocksY = Math.Max(1, (height - borderWidth * 2) / BlockSize);
+            var carriers = DctCarrierBasis.CarrierPositions;
+            var cos = DctCarrierBasis.CosTable;
+            int totalPacketBytes = Math.Min(packet.Length, blocksX * blocksY);
+
+            Parallel.For(0, blocksY, blockY =>
+            {
+                for (int blockX = 0; blockX < blocksX; blockX++)
+                {
+                    int bytePos = (blockY * blocksX) + blockX;
+                    if (bytePos >= totalPacketBytes) continue;
+
+                    int bx = borderWidth + blockX * BlockSize;
+                    int by = borderWidth + blockY * BlockSize;
+                    byte decodedByte = 0;
+
+                    for (int ci = 0; ci < carriers.Length; ci++)
+                    {
+                        var (u, v) = carriers[ci];
+                        double sum = 0;
+
+                        for (int py = 0; py < BlockSize; py++)
+                        {
+                            for (int px = 0; px < BlockSize; px++)
+                            {
+                                int x = bx + px;
+                                int y = by + py;
+                                if (x >= width || y >= height) continue;
+                                int idx = y * effectiveRowBytes + x * bytesPerPixel;
+                                if (idx + 2 >= frameBytes) continue;
+
+                                var frameSpan = frame.Span;
+                                double luma = (frameSpan[idx] + frameSpan[idx + 1] + frameSpan[idx + 2]) / 3.0;
+                                sum += luma * cos[px, u] * cos[py, v];
+                            }
+                        }
+
+                        double coeff = DctCarrierBasis.C(u) * DctCarrierBasis.C(v) / 4.0 * sum;
+                        int bit = coeff > 0 ? 1 : 0;
+                        int bitPos = 7 - (ci % 8);
+                        decodedByte = (byte)(decodedByte | (bit << bitPos));
+                    }
+
+                    packet.Span[bytePos] = decodedByte;
+                }
+            });
         }
     }
 }

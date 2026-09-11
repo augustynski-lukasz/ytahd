@@ -109,7 +109,7 @@ namespace YTAHD.Core.Core
         }
 
         internal static bool TryReadDecodedPacket(
-            ReadOnlySpan<byte> frame,
+            ReadOnlyMemory<byte> frame,
             int width,
             int height,
             int macroblockSize,
@@ -127,7 +127,7 @@ namespace YTAHD.Core.Core
             packet = new byte[framePacketBytes];
 
             var strategy = FrameBitDecoderFactory.CreateForModulator(modulator ?? new BinaryGridModulator(macroblockSize, macroblockSize));
-            strategy.Decode(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
+            strategy.DecodeMemory(frame, width, height, macroblockSize, rowBytes, frameBytes, packet, borderWidth);
 
             if (packet.Length < HeaderBytes)
             {

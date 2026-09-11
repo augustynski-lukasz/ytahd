@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using YTAHD.Core.Infrastructure;
 
 namespace YTAHD.Core.Modulation
@@ -128,31 +129,34 @@ namespace YTAHD.Core.Modulation
                 frame[i] = 128; frame[i + 1] = 128; frame[i + 2] = 128; frame[i + 3] = 255;
             }
 
-            int payloadBitIndex = 0;
-            int totalBits = payload.Length * 8;
+            var payloadBytes = payload.ToArray();
+            int usableWidth = width - borderWidth * 2;
+            int usableHeight = height - borderWidth * 2;
+            int blocksX = Math.Max(0, usableWidth / BlockSize);
+            int blocksY = Math.Max(0, usableHeight / BlockSize);
 
-            for (int blockY = 0; blockY + BlockSize <= height - borderWidth * 2; blockY += BlockSize)
+            Parallel.For(0, blocksY, blockRow =>
             {
-                for (int blockX = 0; blockX + BlockSize <= width - borderWidth * 2; blockX += BlockSize)
+                for (int blockColumn = 0; blockColumn < blocksX; blockColumn++)
                 {
-                    if (payloadBitIndex >= totalBits) break;
-                    int bx = borderWidth + blockX;
-                    int by = borderWidth + blockY;
+                    int payloadByteIndex = (blockRow * blocksX) + blockColumn;
+                    if (payloadByteIndex >= payloadBytes.Length) continue;
+
+                    int bx = borderWidth + (blockColumn * BlockSize);
+                    int by = borderWidth + (blockRow * BlockSize);
+                    int payloadBitIndex = payloadByteIndex * DctCarrierBasis.CarrierPositions.Length;
 
                     for (int py = 0; py < BlockSize; py++)
                     {
                         for (int px = 0; px < BlockSize; px++)
                         {
-                            byte pv = ComputeIdctPixel(payload, payloadBitIndex, px, py);
+                            byte pv = ComputeIdctPixel(payloadBytes, payloadBitIndex, px, py);
                             int idx = ((by + py) * width + (bx + px)) * 4;
                             frame[idx] = pv; frame[idx + 1] = pv; frame[idx + 2] = pv; frame[idx + 3] = 255;
                         }
                     }
-
-                    payloadBitIndex += DctCarrierBasis.CarrierPositions.Length;
                 }
-                if (payloadBitIndex >= totalBits) break;
-            }
+            });
 
             return frame;
         }

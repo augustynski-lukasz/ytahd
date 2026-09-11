@@ -109,3 +109,29 @@ Validate strict frame hashes and whole-payload manifest checks against real FFmp
 phase1, phase2, phase3, and phase4. Include the existing oversized v1 Phase 3 recovery case,
 new v2 high-capacity Phase 3 encodes, deliberate frame corruption, and missing-manifest
 legacy behavior. Not started.
+
+## Parallel pipeline: degree-of-parallelism controls
+
+Phase 3 render/decode and Phase 4 motion tile search are parallelized (see ADRs
+`CR-20260911-09-phase3-parallel-render.md`, `CR-20260911-10-phase3-parallel-decode.md`, and
+`CR-20260911-11-phase4-parallel-tile-search.md`). Add conservative degree-of-parallelism
+controls and keep a serial fallback for deterministic debugging and low-core machines. Not
+started.
+
+## Parallel pipeline: bounded ordered encode pipeline
+
+Split encode into packet producer, bounded render workers, and a single ordered FFmpeg writer.
+Maintain logical frame order, repeats, Phase 4 canonical separators, audio-clock cadence, and
+bounded memory for 4K frame buffers. Not started.
+
+## Parallel pipeline: bounded ordered decode pipeline
+
+Split decode into sequential FFmpeg frame reader, bounded packet decode workers, and ordered
+aggregator. Keep duplicate-run tracking, canonical frame handling, parity recovery, and output
+assembly ordered. Not started.
+
+## Parallel pipeline: performance validation matrix
+
+Add serial-vs-parallel benchmarks by modulator, payload size, resolution, and encoder path.
+Track throughput, CPU utilization, peak memory, FFmpeg wait time, and byte-for-byte recovery.
+Use results to tune default concurrency. Not started.

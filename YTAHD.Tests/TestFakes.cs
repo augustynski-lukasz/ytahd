@@ -72,10 +72,12 @@ namespace YTAHD.Tests
     internal sealed class NonClosingStream : Stream
     {
         private readonly MemoryStream _inner;
+        private readonly Action _onFlush;
 
-        public NonClosingStream(MemoryStream inner)
+        public NonClosingStream(MemoryStream inner, Action onFlush)
         {
             _inner = inner;
+            _onFlush = onFlush;
         }
 
         public override bool CanRead => _inner.CanRead;
@@ -84,7 +86,17 @@ namespace YTAHD.Tests
         public override long Length => _inner.Length;
         public override long Position { get => _inner.Position; set => _inner.Position = value; }
 
-        public override void Flush() => _inner.Flush();
+        public override void Flush()
+        {
+            _onFlush();
+            _inner.Flush();
+        }
+
+        public override Task FlushAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            _onFlush();
+            return _inner.FlushAsync(cancellationToken);
+        }
         public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
         public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
         public override void SetLength(long value) => _inner.SetLength(value);
@@ -114,12 +126,13 @@ namespace YTAHD.Tests
 
         public FakeFFmpegProcess()
         {
-            _stdin = new NonClosingStream(_ms);
+            _stdin = new NonClosingStream(_ms, () => FlushCount++);
         }
 
         public Stream StandardInput => _stdin;
         public MemoryStream Buffer => _ms;
         public long WrittenBytes => _ms.Length;
+        public int FlushCount { get; private set; }
         public Task WaitForExitAsync() => Task.CompletedTask;
         public void Dispose()
         {
