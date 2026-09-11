@@ -1,4 +1,4 @@
-# PLAN — Phase 4 (Motion Vector Modulation) + Audio FSK Clock + GPU Acceleration
+# PLAN — Phase 4 (Motion Vector Modulation) + Audio FSK Clock + GPU Acceleration + Integrity
 
 **Date:** 2026-09-03 **Status:** Approved plan, not started
 **Design ADRs:** `F-20260903-01-phase4-motion-vector-design.md`,
@@ -241,6 +241,79 @@ to the decoder and may see smaller gains.
 
 ---
 
+## Workstream E — Strict integrity verification
+
+**Status: accepted plan, not started.**
+**Design ADR:** `CR-20260911-05-integrity-verification-plan.md` (`Accepted`; flip to
+`Implemented` in the commit that lands strict verification).
+**Backlog items:** strict frame payload SHA validation, stream manifest, final payload hash
+verification, corruption/failure diagnostics, legacy compatibility validation.
+
+Goal: make corruption impossible to accept silently. Frame-level SHA checks must reject bad
+data frames before accumulation, and a stream-level manifest must prove the final assembled
+payload is exactly the original payload.
+
+### E1. Strict per-frame payload SHA validation
+
+- Treat the per-frame SHA-256 field as authoritative for both data and parity frames.
+- v2 packets: decode only succeeds when `SHA256(payload[0..payloadLength])` matches the
+  header hash.
+- v1 packets: decode first tries the declared 16-bit length; for oversized legacy frames,
+  try wrapped candidates (`length + 65536 * n`) and accept only a hash-matching candidate.
+- Any packet with valid magic/header fields but a mismatched payload hash must be rejected as
+  invalid, not accepted with a low score.
+- Tests: exact hash-match acceptance, single-bit payload corruption rejection, header-only
+  parse rejection, v1 oversized legacy hash-based length recovery.
+
+### E2. Stream manifest packet
+
+- Add a protocol-level manifest describing the whole encoded object:
+  - protocol version;
+  - total payload bytes;
+  - full payload SHA-256;
+  - modulator name or identifier;
+  - geometry needed for decode validation (`width`, `height`, `macroblockSize`, `fps`);
+  - data frame count and parity/durability settings.
+- Prefer an explicit manifest frame type over overloading frame index `0` metadata.
+- Emit the manifest redundantly, ideally at the start and end of the stream, so decode can
+  recover the final hash even if one manifest copy is damaged.
+- Tests: manifest encode/decode, duplicate manifest reconciliation, conflicting manifest
+  rejection.
+
+### E3. Final payload verification
+
+- After assembling output bytes, compute SHA-256 over the recovered payload and compare it
+  with the manifest hash.
+- Decode must fail loudly if final bytes are short, long, reordered, or hash-mismatched.
+- CLI output should include final integrity status, for example `payloadSha256=...` and
+  `integrity=passed` / `integrity=failed`.
+- Tests: successful full-payload hash verification, corrupted assembled payload rejection,
+  missing manifest behavior, legacy no-manifest behavior.
+
+### E4. Legacy compatibility policy
+
+- Existing v1 videos without a stream manifest remain decodable using strict per-frame hash
+  validation.
+- For legacy streams, decode can report `integrity=frame-only` because whole-payload SHA is
+  unavailable.
+- New v2+ streams should require a manifest by default once the manifest feature lands.
+- Tests: current real v1 oversized Phase 3 sample remains recoverable; legacy output reports
+  frame-only integrity rather than full manifest verification.
+
+### E5. Diagnostics and observability
+
+- Extend `DecodeMetrics` with counts for hash mismatch, manifest packets seen, final hash
+  verification status, and legacy integrity mode.
+- Error messages should distinguish:
+  - frame payload hash mismatch;
+  - missing required manifest;
+  - manifest conflict;
+  - final payload hash mismatch;
+  - missing/recovered frame data.
+- Tests: metric counts and CLI summary text for each failure mode.
+
+---
+
 ## Sequencing
 
 ```mermaid
@@ -251,12 +324,14 @@ graph LR
     B3 --> C1
     C1 --> C2
     C1 --> D1 --> D2 --> D3 --> D4 --> D5
+    C1 --> E1 --> E2 --> E3 --> E4 --> E5
 ```
 
 Recommended order for a single developer: A1→A2→A3 (pure library code, fast feedback),
 then B1→B2 in parallel-friendly isolation, A4, B3, A5, B4, C1, A6. GPU acceleration should
 start only after the current CPU baseline stays green, then proceed D1→D5 with CPU defaults
-preserved at each step.
+preserved at each step. Integrity hardening should proceed E1→E5 before relying on larger
+payload experiments, because it defines how the decoder proves recovered bytes are correct.
 
 ## Validation commands (per stage)
 
@@ -266,4 +341,7 @@ dotnet run --project YTAHD.Cli -- encode sample.bin out.mp4 --modulator phase4
 dotnet run --project YTAHD.Cli -- decode out.mp4 recovered.bin --modulator phase4
 dotnet run --project YTAHD.Cli -- encode sample.bin out-gpu.mp4 --modulator phase3 --video-encoder h264_nvenc
 dotnet run --project YTAHD.Cli -- decode out-gpu.mp4 recovered.bin --modulator phase3 --hwaccel cuda
+dotnet run --project YTAHD.Cli -- decode out.mp4 recovered.bin --modulator phase3
+Get-FileHash sample.bin -Algorithm SHA256
+Get-FileHash recovered.bin -Algorithm SHA256
 ```

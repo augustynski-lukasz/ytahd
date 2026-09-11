@@ -75,3 +75,37 @@ started.
 Document GPU prerequisites, CLI examples, FFmpeg build requirements, driver/runtime caveats,
 and common errors such as missing encoders, unsupported pixel formats, and unavailable GPU
 devices. Update release notes once GPU flags ship. Not started.
+
+## Integrity: strict per-frame SHA validation
+
+Tracked by ADR `CR-20260911-05-integrity-verification-plan.md` and `docs/PLAN.md` workstream
+E. Enforce the existing per-frame SHA-256 field during packet decode for data and parity
+frames. Reject packets with mismatched payload hashes, while preserving v1 oversized-frame
+recovery by accepting only wrapped length candidates whose payload hash matches. Not started.
+
+## Integrity: stream manifest packet
+
+Add a protocol manifest frame containing protocol version, total payload bytes, full payload
+SHA-256, modulator identity, geometry, data frame count, and durability/parity settings. Emit
+manifest data redundantly so decode can recover integrity metadata under frame loss. Not
+started.
+
+## Integrity: final payload hash verification
+
+After assembling recovered bytes, compute SHA-256 over the full payload and compare it with
+the manifest hash. Surface `integrity=passed` or a loud decode failure in CLI output; legacy
+streams without a manifest should report frame-only integrity. Not started.
+
+## Integrity: corruption diagnostics and metrics
+
+Extend `DecodeMetrics` and CLI summary output with counts/status for frame hash mismatches,
+manifest packets seen, manifest conflicts, final hash verification, and legacy frame-only
+mode. Error messages should distinguish packet corruption from missing frames and final
+payload mismatch. Not started.
+
+## Integrity: legacy and real-codec validation matrix
+
+Validate strict frame hashes and whole-payload manifest checks against real FFmpeg output for
+phase1, phase2, phase3, and phase4. Include the existing oversized v1 Phase 3 recovery case,
+new v2 high-capacity Phase 3 encodes, deliberate frame corruption, and missing-manifest
+legacy behavior. Not started.

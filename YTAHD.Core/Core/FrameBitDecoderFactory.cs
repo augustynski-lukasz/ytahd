@@ -176,7 +176,7 @@ namespace YTAHD.Core.Core
                     score += 4096;
                 }
 
-                if (candidate[2] == FramePacket.FrameVersion)
+                if (candidate[2] == FramePacket.FrameVersion || candidate[2] == FramePacket.LegacyFrameVersion)
                 {
                     score += 256;
                 }
@@ -186,8 +186,11 @@ namespace YTAHD.Core.Core
                     score += 128;
                 }
 
-                int payloadLength = (candidate[17] << 8) | candidate[18];
-                if (payloadLength >= 0 && payloadLength <= candidate.Length - FramePacket.HeaderBytes)
+                int payloadLength = candidate[2] == FramePacket.LegacyFrameVersion
+                    ? (candidate[17] << 8) | candidate[18]
+                    : candidate.Length >= FramePacket.HeaderBytes ? ((candidate[17] << 24) | (candidate[18] << 16) | (candidate[19] << 8) | candidate[20]) : -1;
+                int headerBytes = candidate[2] == FramePacket.LegacyFrameVersion ? FramePacket.LegacyHeaderBytes : FramePacket.HeaderBytes;
+                if (payloadLength >= 0 && payloadLength <= candidate.Length - headerBytes)
                 {
                     score += 128;
                 }

@@ -85,16 +85,18 @@ namespace YTAHD.Tests
 
             Assert.Equal(0x59, packet[0]);
             Assert.Equal(0x54, packet[1]);
-            Assert.Equal(1, packet[2]);
+            Assert.Equal(2, packet[2]);
             Assert.Equal(0, packet[3]);
             Assert.Equal(7, ((packet[4] << 24) | (packet[5] << 16) | (packet[6] << 8) | packet[7]));
             Assert.Equal(12, ((packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11]));
             Assert.Equal(3, ((packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15]));
             Assert.Equal(4, packet[16]);
             Assert.Equal(0, packet[17]);
-            Assert.Equal(4, packet[18]);
-            Assert.Equal(4, packet.Length - 51);
-            Assert.Equal(payload, packet.AsSpan(51, payload.Length).ToArray());
+            Assert.Equal(0, packet[18]);
+            Assert.Equal(0, packet[19]);
+            Assert.Equal(4, packet[20]);
+            Assert.Equal(4, packet.Length - FramePacket.HeaderBytes);
+            Assert.Equal(payload, packet.AsSpan(FramePacket.HeaderBytes, payload.Length).ToArray());
         }
 
         [Fact]
@@ -127,6 +129,91 @@ namespace YTAHD.Tests
             finally
             {
                 File.Delete(tmp);
+            }
+        }
+
+        [Fact]
+        public async Task Encode_Allows_PayloadBytesPerFrame_Above_V1_HeaderLimit()
+        {
+            var tmp = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[ushort.MaxValue + 1];
+                new Random(5).NextBytes(data);
+                await File.WriteAllBytesAsync(tmp, data);
+
+                var fake = new FakeFFmpegWrapper(1, 1, 30);
+                var engine = new EncoderEngine(new HighCapacityModulator(), fake, 1, 1, 1, 30);
+                await engine.EncodeAsync(tmp, "out.mp4");
+
+                Assert.True(engine.LastEncodeMetrics.PayloadBytesPerFrame > ushort.MaxValue);
+                Assert.Equal(1, engine.LastEncodeMetrics.TotalDataFrames);
+            }
+            finally
+            {
+                File.Delete(tmp);
+            }
+        }
+
+        private sealed class HighCapacityModulator : IModulator
+        {
+            public int MacroblockWidth => 1;
+            public int MacroblockHeight => 1;
+
+            public void Encode(ReadOnlySpan<byte> input, Span<byte> pixelBuffer)
+            {
+                if (!input.IsEmpty && !pixelBuffer.IsEmpty)
+                {
+                    pixelBuffer[0] = input[0];
+                }
+            }
+
+            public void Decode(ReadOnlySpan<byte> pixelBuffer, Span<byte> output)
+            {
+                if (!pixelBuffer.IsEmpty && !output.IsEmpty)
+                {
+                    output[0] = pixelBuffer[0];
+                }
+            }
+
+            public int GetPayloadBytesPerFrame(int width, int height, int headerBytes, int borderWidth = 0, int macroblockSize = 0)
+            {
+                return ushort.MaxValue + 1024;
+            }
+
+            public int GetPayloadBytesPerFrame(ModulatorGeometry geometry)
+            {
+                return ushort.MaxValue + 1024;
+            }
+
+            public int GetPacketBufferLength(int width, int height, int headerBytes, int payloadBytesPerFrame, int bitsPerFrame, int macroblockSize = 0)
+            {
+                return headerBytes + payloadBytesPerFrame;
+            }
+
+            public int GetPacketBufferLength(ModulatorGeometry geometry, int payloadBytesPerFrame)
+            {
+                return geometry.HeaderBytes + payloadBytesPerFrame;
+            }
+
+            public int GetBorderWidth(int width, int height, int macroblockSize = 0)
+            {
+                return 0;
+            }
+
+            public int GetBorderWidth(ModulatorGeometry geometry)
+            {
+                return 0;
+            }
+
+            public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+            {
+                return new byte[width * height * 4];
+            }
+
+            public byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
+            {
+                return CreateFrame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
             }
         }
     }

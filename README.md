@@ -220,7 +220,7 @@ $$
 \text{bytes per frame} = \left\lfloor\frac{W - 2B}{8}\right\rfloor \times \left\lfloor\frac{H - 2B}{8}\right\rfloor \times 1
 $$
 
-where $W$, $H$ are frame dimensions and $B$ is the border width (default 32 px). For 3840×2160 with a 32 px border: $\lfloor 3776/8 \rfloor \times \lfloor 2096/8 \rfloor = 472 \times 262 = 123{,}664$ bytes per frame.
+where $W$, $H$ are frame dimensions and $B$ is the border width (default 32 px). For 3840×2160 with a 32 px border: $\lfloor 3776/8 \rfloor \times \lfloor 2096/8 \rfloor = 472 \times 262 = 123{,}664$ bytes per frame. The current v2 frame packet header stores payload length as a 32-bit value, so this capacity is usable rather than capped by the older v1 16-bit length field.
 
 - **Datagram lifespan:** 2 frames at 60 FPS (smooth blocks are codec-friendly; fewer repeat frames are needed for stability).
 

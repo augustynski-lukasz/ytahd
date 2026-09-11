@@ -5,12 +5,16 @@ namespace YTAHD.Core.Core
     public static class FramePacket
     {
         public const int FrameMagic = 0x5954; // 'YT'
-        public const byte FrameVersion = 1;
+        public const byte LegacyFrameVersion = 1;
+        public const byte FrameVersion = 2;
         public const byte FrameTypeData = 0;
         public const byte FrameTypeParity = 1;
 
-        // magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen + sha256
-        public const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
+        // v1: magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen16 + sha256
+        public const int LegacyHeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
+
+        // v2: magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen32 + sha256
+        public const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 4 + 32;
 
         public static bool TryParse(
             byte[] packet,

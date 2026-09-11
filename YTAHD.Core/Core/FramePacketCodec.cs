@@ -12,7 +12,7 @@ namespace YTAHD.Core.Core
             WriteFrameHeader(framePacket, FramePacket.FrameTypeData, frameIndex, totalDataFrames, groupStart, groupCount, payloadLength);
 
             var hash = SHA256.HashData(payload.Slice(0, Math.Min(payloadLength, payload.Length)));
-            Buffer.BlockCopy(hash, 0, framePacket, 19, hash.Length);
+            Buffer.BlockCopy(hash, 0, framePacket, GetHashOffset(FramePacket.FrameVersion), hash.Length);
             Buffer.BlockCopy(payload.ToArray(), 0, framePacket, FramePacket.HeaderBytes, Math.Min(capacity, payload.Length));
 
             return framePacket;
@@ -24,7 +24,7 @@ namespace YTAHD.Core.Core
             WriteFrameHeader(parityPacket, FramePacket.FrameTypeParity, 0, totalDataFrames, groupStart, groupCount, parityPayload.Length);
 
             var parityHash = SHA256.HashData(parityPayload);
-            Buffer.BlockCopy(parityHash, 0, parityPacket, 19, parityHash.Length);
+            Buffer.BlockCopy(parityHash, 0, parityPacket, GetHashOffset(FramePacket.FrameVersion), parityHash.Length);
             parityPayload.CopyTo(parityPacket.AsSpan(FramePacket.HeaderBytes, parityPacket.Length - FramePacket.HeaderBytes));
 
             return parityPacket;
@@ -40,14 +40,20 @@ namespace YTAHD.Core.Core
             payloadLength = 0;
             payload = Array.Empty<byte>();
 
-            if (packet.Length < FramePacket.HeaderBytes)
+            if (packet.Length < FramePacket.LegacyHeaderBytes)
             {
                 return false;
             }
 
             int magic = (packet[0] << 8) | packet[1];
             byte version = packet[2];
-            if (magic != FramePacket.FrameMagic || version != FramePacket.FrameVersion)
+            if (magic != FramePacket.FrameMagic || (version != FramePacket.LegacyFrameVersion && version != FramePacket.FrameVersion))
+            {
+                return false;
+            }
+
+            int headerBytes = GetHeaderBytes(version);
+            if (packet.Length < headerBytes)
             {
                 return false;
             }
@@ -62,15 +68,75 @@ namespace YTAHD.Core.Core
             totalDataFrames = (packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11];
             groupStart = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
             groupCount = packet[16];
-            payloadLength = (packet[17] << 8) | packet[18];
+            payloadLength = version == FramePacket.LegacyFrameVersion
+                ? (packet[17] << 8) | packet[18]
+                : ReadInt32BigEndian(packet.Slice(17, 4));
 
-            if (totalDataFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - FramePacket.HeaderBytes)
+            if (version == FramePacket.LegacyFrameVersion)
+            {
+                payloadLength = ResolveLegacyPayloadLength(packet, payloadLength, headerBytes);
+            }
+
+            if (totalDataFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - headerBytes)
             {
                 return false;
             }
 
-            payload = packet.Slice(FramePacket.HeaderBytes, payloadLength).ToArray();
+            payload = packet.Slice(headerBytes, payloadLength).ToArray();
             return true;
+        }
+
+        private static int ResolveLegacyPayloadLength(ReadOnlySpan<byte> packet, int declaredPayloadLength, int headerBytes)
+        {
+            int payloadCapacity = packet.Length - headerBytes;
+            if (declaredPayloadLength < 0 || declaredPayloadLength > payloadCapacity)
+            {
+                return declaredPayloadLength;
+            }
+
+            var expectedHash = packet.Slice(GetHashOffset(FramePacket.LegacyFrameVersion), 32);
+            if (PayloadHashMatches(packet, headerBytes, declaredPayloadLength, expectedHash))
+            {
+                return declaredPayloadLength;
+            }
+
+            for (int candidateLength = declaredPayloadLength + 65536; candidateLength <= payloadCapacity; candidateLength += 65536)
+            {
+                if (PayloadHashMatches(packet, headerBytes, candidateLength, expectedHash))
+                {
+                    return candidateLength;
+                }
+            }
+
+            return declaredPayloadLength;
+        }
+
+        private static bool PayloadHashMatches(ReadOnlySpan<byte> packet, int headerBytes, int payloadLength, ReadOnlySpan<byte> expectedHash)
+        {
+            if (payloadLength < 0 || payloadLength > packet.Length - headerBytes)
+            {
+                return false;
+            }
+
+            var payload = packet.Slice(headerBytes, payloadLength);
+            var actualHash = SHA256.HashData(payload);
+            return actualHash.AsSpan().SequenceEqual(expectedHash);
+        }
+
+        private static int GetHeaderBytes(byte version)
+        {
+            return version == FramePacket.LegacyFrameVersion ? FramePacket.LegacyHeaderBytes : FramePacket.HeaderBytes;
+        }
+
+        private static int GetHashOffset(byte version)
+        {
+            return version == FramePacket.LegacyFrameVersion ? 19 : 21;
+        }
+
+        private static int ReadInt32BigEndian(ReadOnlySpan<byte> bytes)
+        {
+            long value = ((long)bytes[0] << 24) | ((long)bytes[1] << 16) | ((long)bytes[2] << 8) | bytes[3];
+            return value > int.MaxValue ? -1 : (int)value;
         }
 
         public static bool TryNormalizeWithTolerance(ReadOnlySpan<byte> packet, Span<byte> normalizedPacket, out int shift)
@@ -106,14 +172,13 @@ namespace YTAHD.Core.Core
 
             int magic0Delta = Math.Abs(packet[0] - 0x59);
             int magic1Delta = Math.Abs(packet[1] - 0x54);
-            int versionDelta = Math.Abs(packet[2] - FramePacket.FrameVersion);
+            int versionDelta = Math.Min(Math.Abs(packet[2] - FramePacket.FrameVersion), Math.Abs(packet[2] - FramePacket.LegacyFrameVersion));
             int frameTypeByte = packet[3];
             if (magic0Delta <= 16 && magic1Delta <= 16 && versionDelta <= 4 && (frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity))
             {
                 packet.CopyTo(normalizedPacket);
                 normalizedPacket[0] = 0x59;
                 normalizedPacket[1] = 0x54;
-                normalizedPacket[2] = FramePacket.FrameVersion;
                 return TryDecode(normalizedPacket, out _, out _, out _, out _, out _, out _, out _);
             }
 
@@ -150,7 +215,7 @@ namespace YTAHD.Core.Core
 
             int expectedMagic0 = 0x59;
             int expectedMagic1 = 0x54;
-            int expectedVersion = FramePacket.FrameVersion;
+            int expectedVersion = packet[2] == FramePacket.LegacyFrameVersion ? FramePacket.LegacyFrameVersion : FramePacket.FrameVersion;
             int expectedType = FramePacket.FrameTypeData;
             int sum = 0;
             int count = 0;
@@ -197,6 +262,9 @@ namespace YTAHD.Core.Core
             if (framePacket.Length < FramePacket.HeaderBytes)
                 throw new ArgumentOutOfRangeException(nameof(framePacket));
 
+            if (payloadLength < 0)
+                throw new ArgumentOutOfRangeException(nameof(payloadLength));
+
             framePacket[0] = (byte)((FramePacket.FrameMagic >> 8) & 0xFF);
             framePacket[1] = (byte)(FramePacket.FrameMagic & 0xFF);
             framePacket[2] = FramePacket.FrameVersion;
@@ -214,8 +282,10 @@ namespace YTAHD.Core.Core
             framePacket[14] = (byte)((groupStart >> 8) & 0xFF);
             framePacket[15] = (byte)(groupStart & 0xFF);
             framePacket[16] = (byte)groupCount;
-            framePacket[17] = (byte)((payloadLength >> 8) & 0xFF);
-            framePacket[18] = (byte)(payloadLength & 0xFF);
+            framePacket[17] = (byte)((payloadLength >> 24) & 0xFF);
+            framePacket[18] = (byte)((payloadLength >> 16) & 0xFF);
+            framePacket[19] = (byte)((payloadLength >> 8) & 0xFF);
+            framePacket[20] = (byte)(payloadLength & 0xFF);
         }
     }
 }

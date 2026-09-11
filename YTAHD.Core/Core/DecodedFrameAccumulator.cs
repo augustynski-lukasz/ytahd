@@ -50,7 +50,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            if (frameIndex < 0 || payloadLength < 0 || payloadLength > payloadBytesPerFrame)
+            if (frameIndex < 0 || payloadLength < 0)
             {
                 SawInvalidPacket = true;
                 return false;

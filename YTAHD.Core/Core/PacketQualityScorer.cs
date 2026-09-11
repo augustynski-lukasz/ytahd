@@ -6,7 +6,7 @@ namespace YTAHD.Core.Core
     {
         public static bool IsFramePacketValid(ReadOnlySpan<byte> packet)
         {
-            if (packet.Length < FramePacket.HeaderBytes)
+            if (packet.Length < FramePacket.LegacyHeaderBytes)
             {
                 return false;
             }
@@ -16,7 +16,7 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - FramePacket.HeaderBytes)
+            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0)
             {
                 return false;
             }
@@ -26,7 +26,7 @@ namespace YTAHD.Core.Core
 
         public static int Score(ReadOnlySpan<byte> packet)
         {
-            if (packet.Length < FramePacket.HeaderBytes)
+            if (packet.Length < FramePacket.LegacyHeaderBytes)
             {
                 return 0;
             }
@@ -36,7 +36,7 @@ namespace YTAHD.Core.Core
                 return 0;
             }
 
-            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - FramePacket.HeaderBytes)
+            if (declaredTotalFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0)
             {
                 return 0;
             }

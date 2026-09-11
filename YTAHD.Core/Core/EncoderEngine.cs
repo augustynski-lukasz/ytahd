@@ -19,8 +19,7 @@ namespace YTAHD.Core.Core
         private const byte FrameTypeData = 0;
         private const byte FrameTypeParity = 1;
         private const int DataFramesPerParityGroup = 4;
-        // magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen + sha256
-        private const int HeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
+        private const int HeaderBytes = FramePacket.HeaderBytes;
 
         private readonly IModulator _modulator;
         private readonly YTAHD.Core.Infrastructure.IFFmpegWrapper _ffmpeg;
