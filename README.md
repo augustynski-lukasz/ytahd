@@ -38,7 +38,7 @@ dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
 | `--height`, `-H`          | `2160`        | Output video height.                                        |
 | `--fps`, `-r`             | `60`          | Output framerate.                                           |
 | `--modulator`, `-M`       | `phase1`      | Modulation mode: `phase1`, `phase2`, `phase3`, or `phase4`. |
-| `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe`.                              |
+| `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.             |
 | `--audio-clock`           | `false`       | Mux an audio FSK datagram clock alongside the video.        |
 
 ### Decode
@@ -50,7 +50,7 @@ dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 | Option              | Default       | Description                                                               |
 | ------------------- | ------------- | ------------------------------------------------------------------------- |
 | `--modulator`, `-M` | `phase1`      | Modulation mode used to create the video.                                 |
-| `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe`.                                            |
+| `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                           |
 | `--audio-clock`     | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count. |
 
 ### Reusable Service API
@@ -84,7 +84,8 @@ The encoder and decoder use a real FFmpeg process for the video container layer.
 dotnet run --project YTAHD.Cli -- encode input.bin output.mp4 --ffmpeg-path "D:\!Tools\ffmpeg-20151019\bin\ffmpeg.exe" --fps 60
 ```
 
-The same explicit override is available in decode mode:
+You can also pass the containing FFmpeg `bin` directory instead of the executable path. The
+same explicit override is available in decode mode:
 
 ```powershell
 dotnet run --project YTAHD.Cli -- decode input.mp4 output.bin --ffmpeg-path "D:\!Tools\ffmpeg-20151019\bin\ffmpeg.exe"

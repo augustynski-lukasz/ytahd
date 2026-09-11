@@ -20,9 +20,9 @@ static IModulator CreateModulator(string mode)
 }
 
 // Build a simple command line with extensible options (future-friendly)
-static int TryGetVideoFrameCount(string videoPath)
+static int TryGetVideoFrameCount(string videoPath, string? ffmpegPath)
 {
-    return FFmpegProbe.GetVideoFrameCountAsync(videoPath).GetAwaiter().GetResult();
+    return FFmpegProbe.GetVideoFrameCountAsync(videoPath, ffmpegPath).GetAwaiter().GetResult();
 }
 
 var root = new RootCommand("YTAHD - encode/decode binary data into resilient video frames");
@@ -38,7 +38,7 @@ var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output vi
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
 var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
-var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
+var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-path" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
 var optAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
@@ -77,7 +77,7 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
     });
 
     var metrics = service.LastEncodeMetrics;
-    var actualVideoFrames = TryGetVideoFrameCount(output.FullName);
+    var actualVideoFrames = TryGetVideoFrameCount(output.FullName, ffmpegPath);
     Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}");
 });
 
@@ -87,7 +87,7 @@ var decodeCommand = new Command("decode", "Decode a video back into a binary fil
 decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
 var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
-var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path" }, () => null, "Optional explicit path to ffmpeg.exe; defaults to PATH lookup when omitted.");
+var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-path" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
 var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);

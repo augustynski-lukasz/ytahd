@@ -12,7 +12,8 @@ namespace YTAHD.Core.Infrastructure
         {
             if (!string.IsNullOrWhiteSpace(ffmpegExecutablePath))
             {
-                var ffmpegDir = Path.GetDirectoryName(ffmpegExecutablePath);
+                var resolvedFfmpegPath = FfmpegToolPathResolver.ResolveFfmpegPath(ffmpegExecutablePath);
+                var ffmpegDir = Path.GetDirectoryName(resolvedFfmpegPath);
                 if (!string.IsNullOrWhiteSpace(ffmpegDir))
                 {
                     var candidates = new[]

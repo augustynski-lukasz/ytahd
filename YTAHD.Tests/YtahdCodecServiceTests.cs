@@ -79,6 +79,31 @@ namespace YTAHD.Tests
             Assert.True(isAvailable);
         }
 
+        [Fact]
+        public void FFmpegTools_ResolveExplicitDirectoryPath_WhenProvided()
+        {
+            var ffmpegDir = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}");
+            Directory.CreateDirectory(ffmpegDir);
+
+            try
+            {
+                var ffmpegPath = Path.Combine(ffmpegDir, "ffmpeg.exe");
+                var ffprobePath = Path.Combine(ffmpegDir, "ffprobe.exe");
+                File.WriteAllText(ffmpegPath, string.Empty);
+                File.WriteAllText(ffprobePath, string.Empty);
+
+                var wrapper = new FFmpegWrapper(ffmpegExecutablePath: ffmpegDir);
+                var resolvedFfprobePath = FFmpegProbe.ResolveFfprobePath(ffmpegDir);
+
+                Assert.Equal(ffmpegPath, wrapper.ExecutablePath);
+                Assert.Equal(ffprobePath, resolvedFfprobePath);
+            }
+            finally
+            {
+                if (Directory.Exists(ffmpegDir)) Directory.Delete(ffmpegDir, recursive: true);
+            }
+        }
+
         private static async Task<int> GetActualVideoFrameCountAsync(string videoPath)
         {
             var ffprobePath = "ffprobe";

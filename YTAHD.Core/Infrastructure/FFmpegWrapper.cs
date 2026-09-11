@@ -25,7 +25,7 @@ namespace YTAHD.Core.Infrastructure
             _width = width;
             _height = height;
             _fps = fps;
-            _ffmpegExecutablePath = string.IsNullOrWhiteSpace(ffmpegExecutablePath) ? "ffmpeg" : ffmpegExecutablePath;
+            _ffmpegExecutablePath = FfmpegToolPathResolver.ResolveFfmpegPath(ffmpegExecutablePath);
         }
 
         public string ExecutablePath => _ffmpegExecutablePath;
