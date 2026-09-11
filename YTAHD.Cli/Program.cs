@@ -1,9 +1,11 @@
 using System;
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
 using YTAHD.Core.Application;
+using YTAHD.Core.Core;
 using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
@@ -25,6 +27,28 @@ static int TryGetVideoFrameCount(string videoPath, string? ffmpegPath)
     return FFmpegProbe.GetVideoFrameCountAsync(videoPath, ffmpegPath).GetAwaiter().GetResult();
 }
 
+static IProgress<DecodeProgress> CreateDecodeProgressReporter()
+{
+    var lastReportedPercent = -1;
+
+    return new Progress<DecodeProgress>(progress =>
+    {
+        if (progress.Percentage is not { } percentage)
+        {
+            return;
+        }
+
+        var roundedPercent = (int)Math.Floor(percentage);
+        if (roundedPercent < 100 && roundedPercent - lastReportedPercent < 5)
+        {
+            return;
+        }
+
+        lastReportedPercent = roundedPercent;
+        Console.WriteLine($"Decode progress: {percentage.ToString("F1", CultureInfo.InvariantCulture)}% ({progress.FramesSeen}/{progress.TotalVideoFrames} frames)");
+    });
+}
+
 var root = new RootCommand("YTAHD - encode/decode binary data into resilient video frames");
 
 var argIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -37,9 +61,9 @@ var optMacro = new Option<int>(new[] { "--macroblock-size", "-m" }, () => 16, "M
 var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output video width");
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
-var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
-var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-path" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
-var optAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
+var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase3", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
+var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "-F" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
+var optAudioClock = new Option<bool>(new[] { "--audio-clock", "-A" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
@@ -102,12 +126,15 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulato
         InputVideo = input.FullName,
         OutputFile = output.FullName,
         UseAudioClock = useAudioClock,
-        VerifyFfmpeg = true
+        VerifyFfmpeg = true,
+        Progress = CreateDecodeProgressReporter()
     });
 
     var decodeMetrics = service.LastDecodeMetrics;
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}");
+    var totalVideoFrames = TryGetVideoFrameCount(input.FullName, ffmpegPath);
+    var completionPercentage = totalVideoFrames > 0 ? Math.Min(100d, decodeMetrics.TotalFramesSeen * 100d / totalVideoFrames).ToString("F1", CultureInfo.InvariantCulture) + "%" : "n/a";
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}");
 }, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath, decodeAudioClock);
 
 root.AddCommand(encodeCommand);

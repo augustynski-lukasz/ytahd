@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
@@ -44,6 +45,44 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task DecodeStreamOrchestrator_Reports_Completion_Percentage()
+        {
+            var tmpIn = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[16];
+                new Random(3).NextBytes(data);
+                await File.WriteAllBytesAsync(tmpIn, data);
+
+                var mod = new BinaryGridModulator();
+                var fake = new FakeFFmpegWrapper(Width, Height, 30);
+                var encoder = new EncoderEngine(mod, fake, Macroblock, Width, Height, 30);
+                await encoder.EncodeAsync(tmpIn, "out.mp4");
+
+                var buffer = fake.Process?.Buffer;
+                Assert.NotNull(buffer);
+                buffer.Position = 0;
+
+                var frameBytes = Width * Height * 3;
+                var totalFrames = (int)(buffer.Length / frameBytes);
+                var progressReports = new List<DecodeProgress>();
+                var progress = new CaptureProgress(progressReports);
+
+                var orchestrator = new DecodeStreamOrchestrator(Width, Height, Macroblock);
+                var output = await orchestrator.ProcessAsync(buffer, 0, totalVideoFrames: totalFrames, progress: progress);
+
+                Assert.Equal(data, output[..data.Length]);
+                Assert.NotEmpty(progressReports);
+                Assert.Equal(totalFrames, progressReports[^1].FramesSeen);
+                Assert.Equal(100d, progressReports[^1].Percentage);
+            }
+            finally
+            {
+                File.Delete(tmpIn);
+            }
+        }
+
+        [Fact]
         public async Task EncoderDecoder_RoundTrip_FakeFFmpeg()
         {
             var tmpIn = Path.GetTempFileName();
@@ -74,6 +113,21 @@ namespace YTAHD.Tests
             {
                 File.Delete(tmpIn);
                 File.Delete(tmpOut);
+            }
+        }
+
+        private sealed class CaptureProgress : IProgress<DecodeProgress>
+        {
+            private readonly List<DecodeProgress> _reports;
+
+            public CaptureProgress(List<DecodeProgress> reports)
+            {
+                _reports = reports;
+            }
+
+            public void Report(DecodeProgress value)
+            {
+                _reports.Add(value);
             }
         }
     }

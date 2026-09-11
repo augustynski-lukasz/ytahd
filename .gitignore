@@ -57,3 +57,4 @@ coverage.*
 # Secrets
 secrets.json
 probe-input.bin
+.release-validation/

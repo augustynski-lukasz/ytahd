@@ -26,6 +26,7 @@ namespace YTAHD.Core.Core
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
         private readonly bool _useAudioClock;
+        private readonly IProgress<DecodeProgress>? _progress;
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
@@ -40,6 +41,7 @@ namespace YTAHD.Core.Core
             _useDurabilityMatrix = false;
             _durabilityMatrixOptions = null;
             _useAudioClock = false;
+            _progress = null;
         }
 
         public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
@@ -48,6 +50,7 @@ namespace YTAHD.Core.Core
             _useDurabilityMatrix = options.UseDurabilityMatrix;
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
             _useAudioClock = options.UseAudioClock;
+            _progress = options is DecodeOptions decodeOptions ? decodeOptions.Progress : null;
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -256,6 +259,7 @@ namespace YTAHD.Core.Core
                 ffmpegPath = "ffmpeg";
             }
 
+            int totalVideoFrames = await FFmpegProbe.GetVideoFrameCountAsync(inputVideo, _ffmpeg.ExecutablePath);
             var args = $"-hide_banner -loglevel error -i \"{inputVideo}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r {fps} -";
             var psi = new ProcessStartInfo(ffmpegPath, args)
             {
@@ -267,7 +271,7 @@ namespace YTAHD.Core.Core
 
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode command: {ffmpegPath} {args}");
             using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start ffmpeg for decode.");
-            await DecodeFromRgbStreamAsync(process.StandardOutput.BaseStream, width, height, _macroblockSize, outputFile, audioDatagramCount);
+            await DecodeFromRgbStreamAsync(process.StandardOutput.BaseStream, width, height, _macroblockSize, outputFile, audioDatagramCount, totalVideoFrames);
             await process.WaitForExitAsync();
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode exited with code {process.ExitCode}.");
         }
@@ -279,15 +283,15 @@ namespace YTAHD.Core.Core
         public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, int expectedOutputBytes, string outputFile, int? audioDatagramCount = null)
         {
             var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize, _useDurabilityMatrix, _durabilityMatrixOptions);
-            var output = await orchestrator.ProcessAsync(rgbStream, expectedOutputBytes, audioDatagramCount);
+            var output = await orchestrator.ProcessAsync(rgbStream, expectedOutputBytes, audioDatagramCount, progress: _progress);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
         }
 
-        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, string outputFile, int? audioDatagramCount = null)
+        public async Task DecodeFromRgbStreamAsync(Stream rgbStream, int width, int height, int macroblockSize, string outputFile, int? audioDatagramCount = null, int totalVideoFrames = 0)
         {
             var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize, _useDurabilityMatrix, _durabilityMatrixOptions);
-            var output = await orchestrator.ProcessAsync(rgbStream, 0, audioDatagramCount);
+            var output = await orchestrator.ProcessAsync(rgbStream, 0, audioDatagramCount, totalVideoFrames, _progress);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
         }

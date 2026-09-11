@@ -1,4 +1,4 @@
-# PLAN — Phase 4 (Motion Vector Modulation) + Audio FSK Clock
+# PLAN — Phase 4 (Motion Vector Modulation) + Audio FSK Clock + GPU Acceleration
 
 **Date:** 2026-09-03 **Status:** Approved plan, not started
 **Design ADRs:** `F-20260903-01-phase4-motion-vector-design.md`,
@@ -168,6 +168,79 @@ is one commit with its ADR (`F-YYYYMMDD-NN` for A/B stages, per repo convention)
 
 ---
 
+## Workstream D — Optional FFmpeg GPU acceleration
+
+**Status: accepted plan, not started.**
+**Design ADR:** `CR-20260911-03-gpu-acceleration-plan.md` (`Accepted`; flip to
+`Implemented` in the commit that lands the production path).
+**Backlog items:** GPU encoder/decoder option model, hardware capability detection,
+real-codec validation matrix, release packaging documentation.
+
+Goal: keep CPU `libx264` as the default production baseline while adding opt-in hardware
+acceleration for users with supported FFmpeg builds and GPU drivers. The first production
+target is GPU encode, because raw RGB decode still has to return CPU-visible `rgb24` bytes
+to the decoder and may see smaller gains.
+
+### D1. Codec option model and CLI surface
+
+- Add typed codec options instead of raw stringly-typed FFmpeg argument injection:
+  - `VideoEncoder`: `libx264`, `h264_nvenc`, `h264_qsv`, `h264_amf`.
+  - `HardwareAcceleration`: `none`, `cuda`, `qsv`, `d3d11va`.
+- CLI surface:
+  - `--video-encoder <encoder>` for explicit control.
+  - `--hwaccel <mode>` for decode-side hardware acceleration experiments.
+  - Optional shortcut later: `--gpu nvidia|intel|amd|auto`, mapping to validated encoder
+    and hwaccel pairs.
+- Preserve current defaults exactly: CPU `libx264`, no decode hwaccel.
+- Tests: option parsing, default compatibility, invalid encoder/hwaccel rejection.
+
+### D2. FFmpeg argument generation
+
+- Move encoder-specific FFmpeg argument selection into a small owned abstraction near
+  `FFmpegWrapper`, not scattered through CLI code.
+- CPU baseline keeps the current `libx264` arguments.
+- NVIDIA first-pass encode profile:
+  - `-c:v h264_nvenc -preset p4 -cq 23 -pix_fmt yuv420p`.
+- Intel/AMD profiles remain opt-in after capability detection confirms support:
+  - `h264_qsv` / `h264_amf` with conservative quality settings matched as closely as
+    possible to the CPU CRF-23 durability baseline.
+- Tests: fake-wrapper argument assertions for CPU and each GPU profile.
+
+### D3. Hardware capability detection and diagnostics
+
+- Add a probe helper that checks `ffmpeg -encoders` and `ffmpeg -hwaccels` for requested
+  capabilities before starting a long encode/decode.
+- Fail fast with an actionable message when the selected encoder is missing from the
+  user's FFmpeg build or drivers are unavailable.
+- CLI output should clearly show the selected encoder/hwaccel and whether GPU support was
+  detected.
+- Tests: parser/probe tests using captured sample FFmpeg outputs for supported and missing
+  NVIDIA/Intel/AMD cases.
+
+### D4. Real FFmpeg durability validation
+
+- Validate every GPU encoder with actual encode/decode payload recovery, not just process
+  startup.
+- Minimum matrix before marking production-ready:
+  - modulators: phase1, phase2, phase3, phase4;
+  - payload sizes: tiny, single-frame, multi-frame;
+  - encoders: `libx264`, `h264_nvenc`; add `h264_qsv` and `h264_amf` when local hardware is
+    available.
+- Compare speed, output size, and payload recovery against the CPU baseline.
+- If GPU artifacts are less durable for any modulator, keep that pair experimental and
+  document the limitation.
+
+### D5. Release and documentation updates
+
+- Document GPU prerequisites: FFmpeg build support, GPU driver/runtime requirements, and
+  examples for NVIDIA/Intel/AMD.
+- Update release notes so downloadable executables describe CPU default behavior and GPU
+  opt-in flags.
+- Add a small troubleshooting section for common FFmpeg errors such as unknown encoder,
+  missing device, unsupported pixel format, or driver/runtime mismatch.
+
+---
+
 ## Sequencing
 
 ```mermaid
@@ -177,10 +250,13 @@ graph LR
     A4 --> C1
     B3 --> C1
     C1 --> C2
+    C1 --> D1 --> D2 --> D3 --> D4 --> D5
 ```
 
 Recommended order for a single developer: A1→A2→A3 (pure library code, fast feedback),
-then B1→B2 in parallel-friendly isolation, A4, B3, A5, B4, C1, A6.
+then B1→B2 in parallel-friendly isolation, A4, B3, A5, B4, C1, A6. GPU acceleration should
+start only after the current CPU baseline stays green, then proceed D1→D5 with CPU defaults
+preserved at each step.
 
 ## Validation commands (per stage)
 
@@ -188,4 +264,6 @@ then B1→B2 in parallel-friendly isolation, A4, B3, A5, B4, C1, A6.
 dotnet test YTAHD.Tests/YTAHD.Tests.csproj --logger "console;verbosity=minimal"
 dotnet run --project YTAHD.Cli -- encode sample.bin out.mp4 --modulator phase4
 dotnet run --project YTAHD.Cli -- decode out.mp4 recovered.bin --modulator phase4
+dotnet run --project YTAHD.Cli -- encode sample.bin out-gpu.mp4 --modulator phase3 --video-encoder h264_nvenc
+dotnet run --project YTAHD.Cli -- decode out-gpu.mp4 recovered.bin --modulator phase3 --hwaccel cuda
 ```

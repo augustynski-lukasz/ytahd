@@ -38,7 +38,7 @@ namespace YTAHD.Core.Core
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
-        public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null)
+        public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null, int totalVideoFrames = 0, IProgress<DecodeProgress>? progress = null)
         {
             if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
             if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
@@ -75,6 +75,7 @@ namespace YTAHD.Core.Core
                     }
 
                     if (read < frameBytes) break;
+                    progress?.Report(new DecodeProgress(packets.Count + 1, totalVideoFrames));
 
                     if (DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
                     {
@@ -172,6 +173,7 @@ namespace YTAHD.Core.Core
 
                 legacyFrameIndex++;
                 metrics.TotalFramesSeen++;
+                progress?.Report(new DecodeProgress(metrics.TotalFramesSeen, totalVideoFrames));
                 DebugTrace.Log("DecodeStreamOrchestrator", $"Read frame #{legacyFrameIndex} ({read} bytes) for legacy decode path. invalid packets so far={metrics.InvalidPacketCount}");
 
                 // Canonical separator frames (Phase 4) mark a datagram boundary; they carry no

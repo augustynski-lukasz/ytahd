@@ -43,3 +43,35 @@ pulses at the standard pulse duration, so only the first datagram boundary in a 
 audio-detectable (back-to-back pulses merge into one continuous tone). Needs either a shorter
 FSK pulse duration or a wider Phase 4 cadence to combine usefully — tracked as part of
 `docs/PLAN.md` stage C1. Not started.
+
+## GPU acceleration: codec option model and CLI surface
+
+Tracked by ADR `CR-20260911-03-gpu-acceleration-plan.md` and `docs/PLAN.md` workstream D.
+Add typed app options and CLI flags for selecting FFmpeg video encoders and decode-side
+hardware acceleration while preserving CPU `libx264` as the default. Include validation for
+unsupported option combinations. Not started.
+
+## GPU acceleration: FFmpeg argument generation
+
+Move encoder-specific FFmpeg arguments into a small owned abstraction near `FFmpegWrapper`.
+Implement the CPU baseline plus opt-in NVIDIA `h264_nvenc` first, then add Intel `h264_qsv`
+and AMD `h264_amf` profiles after capability checks exist. Not started.
+
+## GPU acceleration: hardware capability detection
+
+Add probing for `ffmpeg -encoders` and `ffmpeg -hwaccels` so the CLI can fail fast when the
+requested GPU encoder or hwaccel mode is unavailable in the user's FFmpeg build or driver
+stack. Surface actionable diagnostics instead of raw FFmpeg startup failures. Not started.
+
+## GPU acceleration: real-codec durability validation
+
+Build a real FFmpeg validation matrix for GPU encoders across phase1, phase2, phase3, and
+phase4 payload recovery. Measure speed and output size against the CPU `libx264` baseline;
+keep any unreliable GPU/modulator pair experimental until it matches the durability bar. Not
+started.
+
+## GPU acceleration: release docs and troubleshooting
+
+Document GPU prerequisites, CLI examples, FFmpeg build requirements, driver/runtime caveats,
+and common errors such as missing encoders, unsupported pixel formats, and unavailable GPU
+devices. Update release notes once GPU flags ship. Not started.
