@@ -24,7 +24,7 @@ namespace YTAHD.Tests
         }
 
         [Fact]
-        public void TryDecode_Rejects_Invalid_Magic_Or_Length()
+        public void TryDecode_Rejects_Invalid_Magic_Or_length()
         {
             var badHeader = new byte[FramePacket.HeaderBytes];
             badHeader[0] = 0x00;
@@ -74,6 +74,73 @@ namespace YTAHD.Tests
             Assert.True(FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out var payloadLength, out var decodedPayload));
             Assert.Equal(payload.Length, payloadLength);
             Assert.Equal(payload, decodedPayload);
+        }
+
+        [Fact]
+        public void TryDecode_Accepts_V2Packet_With_Matching_Payload_Hash()
+        {
+            var payload = new byte[256];
+            new Random(11).NextBytes(payload);
+
+            var packet = FramePacketCodec.CreateDataFramePacket(3, 10, 0, 4, payload.Length, payload, payload.Length);
+
+            Assert.True(FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out var payloadLength, out var decodedPayload));
+            Assert.Equal(payload.Length, payloadLength);
+            Assert.Equal(payload, decodedPayload);
+        }
+
+        [Fact]
+        public void TryDecode_Rejects_V2Packet_With_Corrupted_Payload()
+        {
+            var payload = new byte[256];
+            new Random(12).NextBytes(payload);
+
+            var packet = FramePacketCodec.CreateDataFramePacket(3, 10, 0, 4, payload.Length, payload, payload.Length);
+
+            // Flip one payload byte after the header hash was written: the header parses, the
+            // declared length is intact, but the payload no longer matches the stored hash.
+            packet[FramePacket.HeaderBytes + 100] ^= 0xFF;
+
+            Assert.False(FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out _, out _));
+        }
+
+        [Fact]
+        public void TryDecode_Rejects_V2Packet_With_Corrupted_Declared_length()
+        {
+            var payload = new byte[256];
+            new Random(13).NextBytes(payload);
+
+            var packet = FramePacketCodec.CreateDataFramePacket(3, 10, 0, 4, payload.Length, payload, payload.Length);
+
+            // A corrupted declared length must not silently truncate the payload: the hash is
+            // computed over the declared slice, so a wrong length fails the hash check.
+            packet[20] ^= 0x01;
+
+            Assert.False(FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out _, out _));
+        }
+
+        [Fact]
+        public void TryDecode_Rejects_V2ParityPacket_With_Corrupted_Payload()
+        {
+            var parity = new byte[64];
+            new Random(14).NextBytes(parity);
+
+            var packet = FramePacketCodec.CreateParityFramePacket(0, 4, 8, parity);
+            packet[FramePacket.HeaderBytes + 10] ^= 0xFF;
+
+            Assert.False(FramePacketCodec.TryDecode(packet, out _, out _, out _, out _, out _, out _, out _));
+        }
+
+        [Fact]
+        public void TryDecodeWithTolerance_Rejects_V2Packet_With_Corrupted_Payload()
+        {
+            var payload = new byte[256];
+            new Random(15).NextBytes(payload);
+
+            var packet = FramePacketCodec.CreateDataFramePacket(3, 10, 0, 4, payload.Length, payload, payload.Length);
+            packet[FramePacket.HeaderBytes + 100] ^= 0xFF;
+
+            Assert.False(FramePacketCodec.TryDecodeWithTolerance(packet, out _, out _, out _, out _, out _, out _, out _));
         }
     }
 }

@@ -30,6 +30,23 @@ namespace YTAHD.Core.Core
             return parityPacket;
         }
 
+        /// <summary>
+        /// Creates a stream manifest frame (CR-20260912-05 stage 2). The manifest body is the
+        /// frame payload, so it is protected by the same per-frame SHA-256 as data and parity
+        /// frames and can ride inside a durability parity group like any other symbol.
+        /// </summary>
+        public static byte[] CreateManifestFramePacket(int totalDataFrames, ReadOnlySpan<byte> manifestPayload)
+        {
+            byte[] manifestPacket = new byte[FramePacket.HeaderBytes + manifestPayload.Length];
+            WriteFrameHeader(manifestPacket, FramePacket.FrameTypeManifest, 0, totalDataFrames, 0, 1, manifestPayload.Length);
+
+            var manifestHash = SHA256.HashData(manifestPayload);
+            Buffer.BlockCopy(manifestHash, 0, manifestPacket, GetHashOffset(FramePacket.FrameVersion), manifestHash.Length);
+            manifestPayload.CopyTo(manifestPacket.AsSpan(FramePacket.HeaderBytes, manifestPacket.Length - FramePacket.HeaderBytes));
+
+            return manifestPacket;
+        }
+
         public static bool TryDecode(ReadOnlySpan<byte> packet, out byte frameType, out int frameIndex, out int totalDataFrames, out int groupStart, out int groupCount, out int payloadLength, out byte[] payload)
         {
             frameType = 0;
@@ -59,7 +76,7 @@ namespace YTAHD.Core.Core
             }
 
             frameType = packet[3];
-            if (frameType != FramePacket.FrameTypeData && frameType != FramePacket.FrameTypeParity)
+            if (frameType != FramePacket.FrameTypeData && frameType != FramePacket.FrameTypeParity && frameType != FramePacket.FrameTypeManifest)
             {
                 return false;
             }
@@ -78,6 +95,16 @@ namespace YTAHD.Core.Core
             }
 
             if (totalDataFrames <= 0 || groupStart < 0 || groupCount <= 0 || payloadLength < 0 || payloadLength > packet.Length - headerBytes)
+            {
+                return false;
+            }
+
+            // Strict per-frame integrity (CR-20260912-05 stage 1): the header hash is authoritative
+            // for both data and parity frames. A packet whose payload does not match it is corrupt,
+            // not merely weak, and must be rejected before accumulation. v1 legacy frames keep the
+            // hash-gated wrapped-length recovery above; their hash is checked there.
+            var expectedHash = packet.Slice(GetHashOffset(version), 32);
+            if (!PayloadHashMatches(packet, headerBytes, payloadLength, expectedHash))
             {
                 return false;
             }
@@ -174,7 +201,7 @@ namespace YTAHD.Core.Core
             int magic1Delta = Math.Abs(packet[1] - 0x54);
             int versionDelta = Math.Min(Math.Abs(packet[2] - FramePacket.FrameVersion), Math.Abs(packet[2] - FramePacket.LegacyFrameVersion));
             int frameTypeByte = packet[3];
-            if (magic0Delta <= 16 && magic1Delta <= 16 && versionDelta <= 4 && (frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity))
+            if (magic0Delta <= 16 && magic1Delta <= 16 && versionDelta <= 4 && (frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity || frameTypeByte == FramePacket.FrameTypeManifest))
             {
                 packet.CopyTo(normalizedPacket);
                 normalizedPacket[0] = 0x59;
@@ -245,7 +272,7 @@ namespace YTAHD.Core.Core
             int magic1Delta = Math.Abs(packet[1] - (expectedMagic1 + shift));
             int versionDelta = Math.Abs(packet[2] - (expectedVersion + shift));
             int frameTypeByte = packet[3];
-            bool typeIsValid = frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity;
+            bool typeIsValid = frameTypeByte == FramePacket.FrameTypeData || frameTypeByte == FramePacket.FrameTypeParity || frameTypeByte == FramePacket.FrameTypeManifest;
             if (magic0Delta <= 16 && magic1Delta <= 16 && versionDelta <= 8 && typeIsValid)
             {
                 return shift;

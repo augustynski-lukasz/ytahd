@@ -34,7 +34,16 @@ namespace YTAHD.Core.Core
         /// <summary>Total logical (data + parity) frames actually reconstructed from the video stream.</summary>
         public int TotalRecoveredLogicalFrames => RecoveredDataFrameCount + RecoveredParityFrameCount;
 
-        /// <summary>
+    /// <summary>
+    /// Whole-payload integrity status (CR-20260912-05 stage 3): <c>Passed</c> when the assembled
+    /// payload matched the stream manifest's SHA-256, <c>Failed</c> when it did not,
+    /// <c>FrameOnly</c> for legacy streams without a manifest, <c>Unknown</c> when the manifest
+    /// was never consulted (e.g. the durability matrix was not used).
+    /// </summary>
+    public IntegrityStatus IntegrityStatus { get; set; } = IntegrityStatus.Unknown;
+
+    /// <summary>The stream manifest recovered from intact manifest frames, if any.</summary>
+    public StreamManifest? Manifest { get; set; }
         /// True when the audio clock indicates more datagrams were sent than the video
         /// pipeline could reconstruct (beyond a small tolerance for detector/AAC noise) —
         /// e.g. a whole parity group silently dropped, which XOR-parity alone cannot detect
@@ -45,6 +54,22 @@ namespace YTAHD.Core.Core
             => AudioDatagramCount.HasValue ? Math.Abs(AudioDatagramCount.Value - TotalRecoveredLogicalFrames) > tolerance : (bool?)null;
 
         public double InvalidPacketRatio => TotalFramesSeen > 0 ? InvalidPacketCount / (double)TotalFramesSeen : 0d;
+    }
+
+    /// <summary>Whole-payload integrity status reported by a decode (CR-20260912-05 stage 3).</summary>
+    public enum IntegrityStatus
+    {
+        /// <summary>No manifest was consulted (durability matrix off, or decode never reached verification).</summary>
+        Unknown = 0,
+
+        /// <summary>Assembled payload matched the manifest's SHA-256.</summary>
+        Passed = 1,
+
+        /// <summary>Assembled payload did not match the manifest's SHA-256.</summary>
+        Failed = 2,
+
+        /// <summary>Legacy stream without a manifest: only per-frame hashes were available.</summary>
+        FrameOnly = 3
     }
 
     public sealed class DecodeThresholds

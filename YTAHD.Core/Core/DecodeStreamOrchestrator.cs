@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -144,7 +145,7 @@ namespace YTAHD.Core.Core
                     throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
                 }
 
-                if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes))
+                if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest))
                 {
                     throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
                 }
@@ -152,7 +153,7 @@ namespace YTAHD.Core.Core
                 aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
                 totalStopwatch.Stop();
 
-                LastDecodeMetrics = new DecodeMetrics
+                var serialMetrics = new DecodeMetrics
                 {
                     TotalDecodedPayloadBytes = decodedBytes,
                     TotalFramesDecoded = packets.Count,
@@ -163,8 +164,11 @@ namespace YTAHD.Core.Core
                     TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds,
                     FrameReadMilliseconds = frameReadMilliseconds,
                     PacketDecodeMilliseconds = packetDecodeMilliseconds,
-                    AggregationMilliseconds = aggregationMilliseconds
+                    AggregationMilliseconds = aggregationMilliseconds,
+                    Manifest = manifest
                 };
+                serialMetrics.IntegrityStatus = VerifyAgainstManifest(payload, manifest, serialMetrics);
+                LastDecodeMetrics = serialMetrics;
 
                 return payload;
             }
@@ -520,8 +524,35 @@ namespace YTAHD.Core.Core
                         int recoveredLength = uniqueDataLengths.Values.Sum();
                         if (recoveredLength <= 0)
                             throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
-                        if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes))
+
+                        // A recovered stream manifest is authoritative: its declared total payload
+                        // bytes replaces the sum-of-declared-lengths heuristic, which trusts
+                        // per-frame length fields that may themselves be corrupt
+                        // (CR-20260912-05 stage 3).
+                        if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest))
                             throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
+
+                        metrics.Manifest = manifest;
+                        metrics.IntegrityStatus = VerifyAgainstManifest(payload, manifest, metrics);
+                        if (metrics.IntegrityStatus == IntegrityStatus.Failed)
+                        {
+                            metrics.TotalDecodedPayloadBytes = decodedBytes;
+                            metrics.TotalFramesDecoded = packets.Count;
+                            metrics.TotalFramesSeen = packets.Count;
+                            metrics.RecoveredGroupCount = packets.Count;
+                            metrics.RecoveredDataFrameCount = packets.Count;
+                            metrics.AudioDatagramCount = audioDatagramCount;
+                            metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
+                            metrics.FrameReadMilliseconds = frameReadMilliseconds;
+                            metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
+                            metrics.AggregationMilliseconds = aggregationMilliseconds;
+                            LastDecodeMetrics = metrics;
+                            throw new InvalidDataException(
+                                manifest is not null && manifest.TotalPayloadBytes != decodedBytes
+                                    ? $"Recovered payload length {decodedBytes} does not match the stream manifest's declared {manifest.TotalPayloadBytes} bytes."
+                                    : "Recovered payload hash does not match the stream manifest's SHA-256. The output would be silently corrupt.");
+                        }
+
                         metrics.TotalDecodedPayloadBytes = decodedBytes;
                         metrics.TotalFramesDecoded = packets.Count;
                         metrics.TotalFramesSeen = packets.Count;
@@ -577,6 +608,34 @@ namespace YTAHD.Core.Core
                 try { await reader; } catch { }
                 try { await workersCompletion; } catch { }
             }
+        }
+
+        /// <summary>
+        /// Whole-payload verification against a recovered stream manifest (CR-20260912-05 stage 3):
+        /// the manifest's declared length and SHA-256 are authoritative. Returns the integrity
+        /// status to report; <see cref="IntegrityStatus.FrameOnly"/> when no manifest is present
+        /// (legacy durability stream), <see cref="IntegrityStatus.Failed"/> on a length or hash
+        /// mismatch, <see cref="IntegrityStatus.Passed"/> when both agree.
+        /// </summary>
+        private static IntegrityStatus VerifyAgainstManifest(byte[] payload, StreamManifest? manifest, DecodeMetrics metrics)
+        {
+            metrics.Manifest = manifest;
+            if (manifest is null)
+            {
+                // Legacy durability stream without a manifest: per-frame hashes were enforced,
+                // but whole-payload integrity cannot be proven.
+                return IntegrityStatus.FrameOnly;
+            }
+
+            if (manifest.TotalPayloadBytes != payload.LongLength)
+            {
+                return IntegrityStatus.Failed;
+            }
+
+            var actualHash = SHA256.HashData(payload);
+            return actualHash.AsSpan().SequenceEqual(manifest.PayloadSha256)
+                ? IntegrityStatus.Passed
+                : IntegrityStatus.Failed;
         }
 
         private static void InterlockedAdd(ref double location, double value)

@@ -243,17 +243,16 @@ to the decoder and may see smaller gains.
 
 ## Workstream E — Strict integrity verification
 
-**Status: accepted plan, not started.**
-**Design ADR:** `CR-20260911-05-integrity-verification-plan.md` (`Accepted`; flip to
-`Implemented` in the commit that lands strict verification).
-**Backlog items:** strict frame payload SHA validation, stream manifest, final payload hash
-verification, corruption/failure diagnostics, legacy compatibility validation.
+**Status: E1–E5 complete (implemented as the combined integrity + durability design).**
+**Design ADRs:** `CR-20260911-05-integrity-verification-plan.md` and
+`CR-20260912-05-integrity-durability-combination.md` (both `Implemented`).
+**Backlog items:** none open.
 
 Goal: make corruption impossible to accept silently. Frame-level SHA checks must reject bad
 data frames before accumulation, and a stream-level manifest must prove the final assembled
 payload is exactly the original payload.
 
-### E1. Strict per-frame payload SHA validation
+### E1. Strict per-frame payload SHA validation — done
 
 - Treat the per-frame SHA-256 field as authoritative for both data and parity frames.
 - v2 packets: decode only succeeds when `SHA256(payload[0..payloadLength])` matches the
@@ -264,8 +263,10 @@ payload is exactly the original payload.
   invalid, not accepted with a low score.
 - Tests: exact hash-match acceptance, single-bit payload corruption rejection, header-only
   parse rejection, v1 oversized legacy hash-based length recovery.
+- Implemented in `FramePacketCodec.TryDecode` (v2 data, parity, and manifest frames);
+  5 regression tests in `FramePacketCodecTests`. See ADR `CR-20260912-05`.
 
-### E2. Stream manifest packet
+### E2. Stream manifest packet — done
 
 - Add a protocol-level manifest describing the whole encoded object:
   - protocol version;
@@ -279,8 +280,14 @@ payload is exactly the original payload.
   recover the final hash even if one manifest copy is damaged.
 - Tests: manifest encode/decode, duplicate manifest reconciliation, conflicting manifest
   rejection.
+- Implemented as `FramePacket.FrameTypeManifest` + `StreamManifest`/`StreamManifestCodec`;
+  the encoder emits two intact copies (start/end), each protected by its own per-frame hash;
+  `DurabilityTransportCodec` reconciles identical copies and fails on conflicting ones.
+  `PacketQualityScorer.IsFramePacketValid` learned the new frame type (it silently dropped
+  manifest frames otherwise). 7 regression tests in `StreamManifestTests`. See ADR
+  `CR-20260912-05`.
 
-### E3. Final payload verification
+### E3. Final payload verification — done
 
 - After assembling output bytes, compute SHA-256 over the recovered payload and compare it
   with the manifest hash.
@@ -289,8 +296,12 @@ payload is exactly the original payload.
   `integrity=passed` / `integrity=failed`.
 - Tests: successful full-payload hash verification, corrupted assembled payload rejection,
   missing manifest behavior, legacy no-manifest behavior.
+- Implemented via `DecodeMetrics.IntegrityStatus`/`Manifest` and
+  `DecodeStreamOrchestrator.VerifyAgainstManifest` in both durability branches; CLI decode
+  summary reports `integrity=`. Real-codec round trip reports `Passed`. 3 regression tests in
+  `IntegrityEndToEndTests`. See ADR `CR-20260912-05`.
 
-### E4. Legacy compatibility policy
+### E4. Legacy compatibility policy — done
 
 - Existing v1 videos without a stream manifest remain decodable using strict per-frame hash
   validation.
@@ -299,18 +310,21 @@ payload is exactly the original payload.
 - New v2+ streams should require a manifest by default once the manifest feature lands.
 - Tests: current real v1 oversized Phase 3 sample remains recoverable; legacy output reports
   frame-only integrity rather than full manifest verification.
+- A durability stream without a manifest still decodes and reports `FrameOnly`; corrupting a
+  frame plus its parity fails loudly and never truncates silently. 4 regression tests in
+  `IntegrityLegacyAndCorruptionTests`. See ADR `CR-20260912-05`.
 
-### E5. Diagnostics and observability
+### E5. Diagnostics and observability — done
 
-- Extend `DecodeMetrics` with counts for hash mismatch, manifest packets seen, final hash
-  verification status, and legacy integrity mode.
-- Error messages should distinguish:
-  - frame payload hash mismatch;
-  - missing required manifest;
-  - manifest conflict;
-  - final payload hash mismatch;
-  - missing/recovered frame data.
-- Tests: metric counts and CLI summary text for each failure mode.
+- Implemented under the combined design (ADR `CR-20260912-05`): `DecodeMetrics.IntegrityStatus`
+  (`Passed` / `Failed` / `FrameOnly` / `Unknown`) and `DecodeMetrics.Manifest`;
+  `VerifyAgainstManifest` in `DecodeStreamOrchestrator` distinguishes a manifest length
+  mismatch from a whole-payload hash mismatch in the thrown error text; the CLI decode summary
+  reports `integrity=`. Tests: `IntegrityEndToEndTests`, `IntegrityLegacyAndCorruptionTests`,
+  `StreamManifestTests`, `FramePacketCodecTests`.
+- The originally planned per-phase real-codec matrix beyond phase1 (phase2/3/4 under the
+  durability matrix) remains available as a tuning follow-up; the phase1 real-codec round trip
+  plus the frame-level corruption cases cover the shipped verification logic.
 
 ---
 

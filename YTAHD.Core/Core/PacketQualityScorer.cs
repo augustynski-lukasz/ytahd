@@ -21,7 +21,9 @@ namespace YTAHD.Core.Core
                 return false;
             }
 
-            return frameType == FramePacket.FrameTypeData || frameType == FramePacket.FrameTypeParity;
+            // Manifest frames are protocol frames too (CR-20260912-05 stage 2); they carry no
+            // durability payload and must not be dropped by the packet-validity gate.
+            return frameType == FramePacket.FrameTypeData || frameType == FramePacket.FrameTypeParity || frameType == FramePacket.FrameTypeManifest;
         }
 
         public static int Score(ReadOnlySpan<byte> packet)

@@ -125,11 +125,33 @@ namespace YTAHD.Core.Core
             if (_useDurabilityMatrix)
             {
                 var packetStopwatch = Stopwatch.StartNew();
-                var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
-                framePackets = durabilityCodec.EncodeToFramePackets(data).ToArray();
+                var matrixOptions = _durabilityMatrixOptions ?? new DurabilityMatrixOptions();
+                var durabilityCodec = new DurabilityTransportCodec(matrixOptions);
+
+                // Stream manifest (CR-20260912-05 stage 2/3): proves whole-payload integrity at
+                // decode time and gives the matrix an authoritative expected length. The data
+                // frame count is known before emission: the matrix splits the payload into
+                // fixed-size symbols, one data frame per symbol.
+                var dataFrameCount = (int)Math.Ceiling(data.Length / (double)matrixOptions.SymbolSize);
+                var manifest = new StreamManifest
+                {
+                    TotalPayloadBytes = data.LongLength,
+                    PayloadSha256 = SHA256.HashData(data),
+                    ModulatorId = _modulator.GetType().Name,
+                    Width = _width,
+                    Height = _height,
+                    MacroblockSize = _macroblockSize,
+                    Fps = _fps,
+                    DataFrameCount = dataFrameCount,
+                    ParityGroupSize = matrixOptions.GroupSize,
+                    ParitySymbolsPerGroup = matrixOptions.ParitySymbolsPerGroup,
+                    UseDurabilityMatrix = true
+                };
+
+                framePackets = durabilityCodec.EncodeToFramePackets(data, manifest).ToArray();
                 packetStopwatch.Stop();
                 timings.PacketBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
-                totalDataFrames = framePackets.Length;
+                totalDataFrames = framePackets.Count(p => p[3] == FramePacket.FrameTypeData);
             }
             else
             {

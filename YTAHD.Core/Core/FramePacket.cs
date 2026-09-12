@@ -10,6 +10,13 @@ namespace YTAHD.Core.Core
         public const byte FrameTypeData = 0;
         public const byte FrameTypeParity = 1;
 
+        /// <summary>
+        /// Stream manifest frame (CR-20260912-05 stage 2): describes the whole encoded object so
+        /// decode can prove whole-payload integrity. Emitted redundantly and carried inside the
+        /// durability parity groups like a data symbol.
+        /// </summary>
+        public const byte FrameTypeManifest = 2;
+
         // v1: magic + version + frameType + frameIndex + totalDataFrames + groupStart + groupCount + payloadLen16 + sha256
         public const int LegacyHeaderBytes = 2 + 1 + 1 + 4 + 4 + 4 + 1 + 2 + 32;
 
