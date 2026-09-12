@@ -47,4 +47,15 @@ namespace YTAHD.Core.Modulation
         /// </summary>
         void Decode(ReadOnlySpan<byte> pixelBuffer, Span<byte> output);
     }
+
+    /// <summary>
+    /// A modulator that forwards to another modulator. The frame-bit-decoder factory resolves the
+    /// decoder for the effective (inner) modulator, so decorating wrappers keep working with the
+    /// pipeline instead of failing decoder resolution.
+    /// </summary>
+    public interface IModulatorDecorator : IModulator
+    {
+        /// <summary>Gets the modulator this wrapper forwards to.</summary>
+        IModulator Inner { get; }
+    }
 }

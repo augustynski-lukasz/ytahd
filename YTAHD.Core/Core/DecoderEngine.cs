@@ -28,6 +28,7 @@ namespace YTAHD.Core.Core
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
         private readonly bool _useAudioClock;
         private readonly IProgress<DecodeProgress>? _progress;
+        /// <summary>Resolved worker count from <see cref="ParallelismPolicy"/>; <c>1</c> selects the serial path.</summary>
         private readonly int _maxDegreeOfParallelism;
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
@@ -44,7 +45,7 @@ namespace YTAHD.Core.Core
             _durabilityMatrixOptions = null;
             _useAudioClock = false;
             _progress = null;
-            _maxDegreeOfParallelism = 0;
+            _maxDegreeOfParallelism = ParallelismPolicy.Resolve(0);
         }
 
         public DecoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
@@ -54,7 +55,7 @@ namespace YTAHD.Core.Core
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
             _useAudioClock = options.UseAudioClock;
             _progress = options is DecodeOptions decodeOptions ? decodeOptions.Progress : null;
-            _maxDegreeOfParallelism = options.MaxDegreeOfParallelism;
+            _maxDegreeOfParallelism = ParallelismPolicy.Resolve(options.MaxDegreeOfParallelism);
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -187,15 +188,13 @@ namespace YTAHD.Core.Core
 
             try
             {
-                using var proc = Process.Start(psi);
-                if (proc == null)
-                {
-                    return (_width, _height, _fps);
-                }
+                using var child = ChildProcessScope.Start(psi, "Failed to start ffprobe.");
+                var proc = child.Process;
 
-                var output = await proc.StandardOutput.ReadToEndAsync();
+                var stderrDrain = ChildProcessPipes.DrainAsync(proc.StandardError);
+                var output = await ChildProcessPipes.ReadToEndAsync(proc.StandardOutput);
                 await proc.WaitForExitAsync();
-
+                await stderrDrain;
                 if (proc.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
                 {
                     return (_width, _height, _fps);
@@ -274,9 +273,23 @@ namespace YTAHD.Core.Core
             };
 
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode command: {ffmpegPath} {args}");
-            using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start ffmpeg for decode.");
-            await DecodeFromRgbStreamAsync(process.StandardOutput.BaseStream, width, height, _macroblockSize, outputFile, audioDatagramCount, totalVideoFrames, cancellationToken);
+            using var child = ChildProcessScope.Start(psi, "Failed to start ffmpeg for decode.");
+            var process = child.Process;
+
+            // stderr must be consumed while stdout is being read; otherwise a chatty decode can fill
+            // the stderr pipe buffer and block ffmpeg before it finishes writing rgb frames to stdout.
+            var stderrDrain = ChildProcessPipes.DrainAsync(process.StandardError);
+
+            // stdout is wrapped rather than read directly: a pipe read cannot complete on an IO completion
+            // port, so awaiting the raw pipe parks a thread-pool thread for the whole decode and enough
+            // concurrent decodes then starve the pool the pipeline itself runs on.
+            using (var rgbStream = new ChildPipeStream(process.StandardOutput.BaseStream))
+            {
+                await DecodeFromRgbStreamAsync(rgbStream, width, height, _macroblockSize, outputFile, audioDatagramCount, totalVideoFrames, cancellationToken);
+            }
+
             await process.WaitForExitAsync();
+            await stderrDrain;
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode exited with code {process.ExitCode}.");
         }
 

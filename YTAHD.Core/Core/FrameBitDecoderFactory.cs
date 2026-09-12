@@ -25,6 +25,11 @@ namespace YTAHD.Core.Core
 
     public static class FrameBitDecoderFactory
     {
+        /// <summary>
+        /// Creates the frame bit decoder matching <paramref name="modulator"/>, inheriting the
+        /// modulator's <see cref="IParallelismConfigurable.InnerDegreeOfParallelism"/> so a single
+        /// assignment on the modulator reaches every decoder the pipeline creates for it.
+        /// </summary>
         public static IFrameBitDecoder CreateForModulator(IModulator modulator)
         {
             if (modulator == null)
@@ -32,27 +37,43 @@ namespace YTAHD.Core.Core
                 throw new ArgumentNullException(nameof(modulator));
             }
 
+            // Resolve the decoder for the effective modulator, so a decorating wrapper (for example a
+            // test double that varies per-frame decode cost) resolves to the decoder of what it wraps.
+            while (modulator is IModulatorDecorator decorator)
+            {
+                modulator = decorator.Inner ?? throw new ArgumentException("A modulator decorator must expose an inner modulator.", nameof(modulator));
+            }
+
+            IFrameBitDecoder decoder;
+
             if (modulator is BinaryGridModulator)
             {
-                return new BinaryGridFrameBitDecoder();
+                decoder = new BinaryGridFrameBitDecoder();
             }
-
-            if (modulator is PseudoQamModulator)
+            else if (modulator is PseudoQamModulator)
             {
-                return new PseudoQamFrameBitDecoder();
+                decoder = new PseudoQamFrameBitDecoder();
             }
-
-            if (modulator is DctModulator)
+            else if (modulator is DctModulator)
             {
-                return new DctFrameBitDecoder();
+                decoder = new DctFrameBitDecoder();
             }
-
-            if (modulator is MotionVectorModulator)
+            else if (modulator is MotionVectorModulator)
             {
-                return new MotionFrameBitDecoder();
+                decoder = new MotionFrameBitDecoder();
+            }
+            else
+            {
+                throw new NotSupportedException($"No frame bit decoder available for modulator '{modulator.GetType().Name}'.");
             }
 
-            throw new NotSupportedException($"No frame bit decoder available for modulator '{modulator.GetType().Name}'.");
+            if (modulator is IParallelismConfigurable modulatorParallelism
+                && decoder is IParallelismConfigurable decoderParallelism)
+            {
+                decoderParallelism.InnerDegreeOfParallelism = modulatorParallelism.InnerDegreeOfParallelism;
+            }
+
+            return decoder;
         }
     }
 
@@ -289,9 +310,12 @@ namespace YTAHD.Core.Core
         }
     }
 
-    public sealed class DctFrameBitDecoder : IFrameBitDecoder
+    public sealed class DctFrameBitDecoder : IFrameBitDecoder, IParallelismConfigurable
     {
         private const int BlockSize = DctCarrierBasis.BlockSize; // 8
+
+        /// <inheritdoc />
+        public int InnerDegreeOfParallelism { get; set; } = Environment.ProcessorCount;
 
         /// <summary>
         /// Decode a frame produced by <see cref="DctModulator"/>.
@@ -372,7 +396,7 @@ namespace YTAHD.Core.Core
             var cos = DctCarrierBasis.CosTable;
             int totalPacketBytes = Math.Min(packet.Length, blocksX * blocksY);
 
-            Parallel.For(0, blocksY, blockY =>
+            InnerLoopParallelism.ForEachRow(blocksY, InnerDegreeOfParallelism, blockY =>
             {
                 for (int blockX = 0; blockX < blocksX; blockX++)
                 {

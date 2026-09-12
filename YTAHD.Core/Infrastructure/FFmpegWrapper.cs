@@ -42,9 +42,12 @@ namespace YTAHD.Core.Infrastructure
                     RedirectStandardError = true
                 };
 
-                using var p = Process.Start(psi);
-                if (p == null) return false;
+                using var child = ChildProcessScope.Start(psi, "Failed to start ffmpeg.");
+                var p = child.Process;
+                var stdoutDrain = ChildProcessPipes.DrainAsync(p.StandardOutput);
+                var stderrDrain = ChildProcessPipes.DrainAsync(p.StandardError);
                 await p.WaitForExitAsync();
+                await Task.WhenAll(stdoutDrain, stderrDrain);
                 return p.ExitCode == 0;
             }
             catch
@@ -91,28 +94,19 @@ namespace YTAHD.Core.Infrastructure
             {
                 UseShellExecute = false,
                 RedirectStandardInput = true,
-                RedirectStandardOutput = true,
+                // stdout is deliberately not redirected: media goes to the output file, and a
+                // redirected-but-unread pipe is a deadlock waiting for a buffer to fill.
+                RedirectStandardOutput = false,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
 
             _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start ffmpeg");
 
-            // Optionally read stderr to observe ffmpeg progress asynchronously
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var sr = _process.StandardError;
-                    while (!sr.EndOfStream)
-                    {
-                        var line = await sr.ReadLineAsync();
-                        if (line is not null)
-                            Console.Error.WriteLine(line);
-                    }
-                }
-                catch { }
-            });
+            // Consume stderr concurrently, on a dedicated thread: reading this pipe is a blocking
+            // operation, so draining it from the thread pool would park a pool thread for the whole
+            // lifetime of the encode and starve the pool the pipeline itself runs on.
+            _ = ChildProcessPipes.DrainAsync(_process.StandardError);
 
             return new ProcessWrapper(_process);
         }
@@ -133,14 +127,17 @@ namespace YTAHD.Core.Infrastructure
                     RedirectStandardError = true
                 };
 
-                using var process = Process.Start(psi);
-                if (process == null) return null;
+                using var child = ChildProcessScope.Start(psi, "Failed to start ffmpeg.");
+                var process = child.Process;
 
+                // The pipe is pumped on a dedicated thread; reading it from the pool would park a
+                // pool thread for the whole duration of the extraction.
+                using var stdout = new ChildPipeStream(process.StandardOutput.BaseStream);
                 using var pcmStream = new MemoryStream();
-                var copyTask = process.StandardOutput.BaseStream.CopyToAsync(pcmStream);
-                var stderrTask = process.StandardError.ReadToEndAsync();
-                await Task.WhenAll(copyTask, process.WaitForExitAsync());
-                await stderrTask;
+                var stderrDrain = ChildProcessPipes.DrainAsync(process.StandardError);
+                await stdout.CopyToAsync(pcmStream);
+                await process.WaitForExitAsync();
+                await stderrDrain;
 
                 if (process.ExitCode != 0 || pcmStream.Length == 0)
                     return null;
@@ -163,12 +160,10 @@ namespace YTAHD.Core.Infrastructure
             {
                 try
                 {
-                    if (!_p.HasExited)
-                    {
-                        _p.Kill(true);
-                    }
+                    // Bounded wait, not a bare Kill: an encode that was cancelled mid-flight must not leave
+                    // the child still writing the output video once the call has returned to the caller.
+                    ChildProcessLifetime.KillAndWait(_p);
                 }
-                catch { }
                 finally { _p.Dispose(); }
             }
         }
@@ -177,13 +172,15 @@ namespace YTAHD.Core.Infrastructure
         {
             try
             {
-                if (_process != null && !_process.HasExited)
+                if (_process != null)
                 {
-                    _process.Kill(true);
+                    ChildProcessLifetime.KillAndWait(_process);
                 }
+            }
+            finally
+            {
                 _process?.Dispose();
             }
-            catch { }
         }
     }
 }

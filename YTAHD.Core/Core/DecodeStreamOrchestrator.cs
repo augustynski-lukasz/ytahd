@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using YTAHD.Core.Application;
 using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
@@ -19,6 +20,7 @@ namespace YTAHD.Core.Core
         private readonly int _macroblockSize;
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
+        /// <summary>Resolved worker count from <see cref="ParallelismPolicy"/>; <c>1</c> selects the serial path.</summary>
         private readonly int _maxDegreeOfParallelism;
 
         public DecodeStreamOrchestrator(int width, int height, int macroblockSize)
@@ -39,8 +41,14 @@ namespace YTAHD.Core.Core
             _macroblockSize = macroblockSize;
             _useDurabilityMatrix = useDurabilityMatrix;
             _durabilityMatrixOptions = durabilityMatrixOptions ?? new DurabilityMatrixOptions();
-            if (maxDegreeOfParallelism < 0) throw new ArgumentOutOfRangeException(nameof(maxDegreeOfParallelism));
-            _maxDegreeOfParallelism = maxDegreeOfParallelism;
+            _maxDegreeOfParallelism = ParallelismPolicy.Resolve(maxDegreeOfParallelism);
+
+            // Split the resolved CPU budget with the modulator's inner loop instead of granting it
+            // to both layers; decoders created from this modulator inherit the value.
+            if (_modulator is IParallelismConfigurable configurable)
+            {
+                configurable.InnerDegreeOfParallelism = ParallelismPolicy.ResolveInnerDegree(maxDegreeOfParallelism, _maxDegreeOfParallelism);
+            }
         }
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
@@ -72,7 +80,7 @@ namespace YTAHD.Core.Core
             var packetGeometry = geometry with { BitsPerFrame = bitsPerFrame };
             int packetByteLength = _modulator.GetPacketBufferLength(packetGeometry, payloadBytesPerFrame);
 
-            if (_maxDegreeOfParallelism > 0)
+            if (_maxDegreeOfParallelism > 1)
             {
                 return await ProcessParallelAsync(rgbStream, expectedOutputBytes, audioDatagramCount, totalVideoFrames, progress, borderWidth, payloadBytesPerFrame, rowBytes, frameBytes, bitsPerFrame, packetByteLength, totalStopwatch, cancellationToken);
             }
@@ -347,7 +355,24 @@ namespace YTAHD.Core.Core
                         readStopwatch.Stop();
                         InterlockedAdd(ref frameReadMilliseconds, readStopwatch.Elapsed.TotalMilliseconds);
                         if (read < frameBytes) break;
-                        await work.Writer.WriteAsync(new DecodeWorkItem(sequence++, frame), token);
+
+                        // Reserve the result slot here, in sequence order, before dispatching the frame.
+                        // Slots are released by the aggregator only on in-order consumption, so if a
+                        // worker acquired its own slot after decoding, a slow head frame could see every
+                        // slot taken by later frames that the aggregator is still holding out of order -
+                        // a circular wait that froze the whole decode. Acquiring in the reader guarantees
+                        // the head item always holds a slot before any later item can, so the aggregator
+                        // can always consume the head and release.
+                        await resultSlots.WaitAsync(token);
+                        try
+                        {
+                            await work.Writer.WriteAsync(new DecodeWorkItem(sequence++, frame), token);
+                        }
+                        catch
+                        {
+                            resultSlots.Release();
+                            throw;
+                        }
                     }
                     work.Writer.TryComplete();
                 }
@@ -381,16 +406,11 @@ namespace YTAHD.Core.Core
                             decoder.DecodeMemory(item.Frame, _width, _height, _macroblockSize, rowBytes, frameBytes, signature, borderWidth);
                         }
                         decodeStopwatch.Stop();
-                        await resultSlots.WaitAsync(token);
-                        try
-                        {
-                            await results.Writer.WriteAsync(new DecodedFrame(item.Sequence, item.Frame, canonical, packetIsValid, packet, signature, packetIsValid ? DecoderEngine.GetPacketQualityScore(packet!) : 0, decodeStopwatch.Elapsed.TotalMilliseconds), token);
-                        }
-                        catch
-                        {
-                            resultSlots.Release();
-                            throw;
-                        }
+
+                        // The slot for this frame was already reserved by the reader in sequence order;
+                        // the worker only produces the result. The aggregator releases the slot when it
+                        // consumes the frame in order.
+                        await results.Writer.WriteAsync(new DecodedFrame(item.Sequence, item.Frame, canonical, packetIsValid, packet, signature, packetIsValid ? DecoderEngine.GetPacketQualityScore(packet!) : 0, decodeStopwatch.Elapsed.TotalMilliseconds), token);
                     }
                 }
                 catch (Exception ex)

@@ -12,11 +12,14 @@ namespace YTAHD.Core.Core
     /// decoders). <see cref="IsCanonicalFrame"/> is a separate classifier used by the
     /// pipeline to detect "no data" frames before attempting packet decode.
     /// </summary>
-    public sealed class MotionFrameBitDecoder : IFrameBitDecoder
+    public sealed class MotionFrameBitDecoder : IFrameBitDecoder, IParallelismConfigurable
     {
         private const int CellSize = MotionTileBasis.CellSize;
         private const int TextureSize = MotionTileBasis.TextureSize;
         private const int Guard = MotionTileBasis.MaxAbsOffsetPx;
+
+        /// <inheritdoc />
+        public int InnerDegreeOfParallelism { get; set; } = Environment.ProcessorCount;
 
         public void Decode(ReadOnlySpan<byte> frame, int width, int height, int macroblockSize, int rowBytes, int frameBytes, Span<byte> packet, int borderWidth = 0)
         {
@@ -62,7 +65,7 @@ namespace YTAHD.Core.Core
             int blocksY = Math.Max(1, (height - borderWidth * 2) / CellSize);
             int totalBytes = Math.Min(packet.Length, blocksX * blocksY);
 
-            Parallel.For(0, blocksY, blockY =>
+            InnerLoopParallelism.ForEachRow(blocksY, InnerDegreeOfParallelism, blockY =>
             {
                 for (int blockX = 0; blockX < blocksX; blockX++)
                 {
@@ -83,10 +86,10 @@ namespace YTAHD.Core.Core
 
         /// <summary>Instance entry point used by the decode pipeline (see <see cref="IFrameBitDecoder"/>).</summary>
         public bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth)
-            => IsCanonicalFrame(frame, width, height, borderWidth, canonicalFraction: 0.9);
+            => IsCanonicalFrame(frame, width, height, borderWidth, canonicalFraction: 0.9, InnerDegreeOfParallelism);
 
         public bool IsCanonicalFrameMemory(ReadOnlyMemory<byte> frame, int width, int height, int borderWidth)
-            => IsCanonicalFrameMemory(frame, width, height, borderWidth, canonicalFraction: 0.9);
+            => IsCanonicalFrameMemory(frame, width, height, borderWidth, canonicalFraction: 0.9, InnerDegreeOfParallelism);
 
         /// <summary>
         /// Classifies a decoded frame as canonical ("no data", every tile at home) by
@@ -95,6 +98,11 @@ namespace YTAHD.Core.Core
         /// cells reaches <paramref name="canonicalFraction"/>.
         /// </summary>
         public static bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth = 32, double canonicalFraction = 0.9)
+            => IsCanonicalFrame(frame, width, height, borderWidth, canonicalFraction, Environment.ProcessorCount);
+
+        /// <inheritdoc cref="IsCanonicalFrame(ReadOnlySpan{byte}, int, int, int, double)"/>
+        /// <param name="innerDegreeOfParallelism">Worker count for the per-row cell search; one is serial.</param>
+        public static bool IsCanonicalFrame(ReadOnlySpan<byte> frame, int width, int height, int borderWidth, double canonicalFraction, int innerDegreeOfParallelism)
         {
             bool isRgba = frame.Length == width * height * 4;
             int bytesPerPixel = isRgba ? 4 : 3;
@@ -126,6 +134,11 @@ namespace YTAHD.Core.Core
         }
 
         public static bool IsCanonicalFrameMemory(ReadOnlyMemory<byte> frame, int width, int height, int borderWidth = 32, double canonicalFraction = 0.9)
+            => IsCanonicalFrameMemory(frame, width, height, borderWidth, canonicalFraction, Environment.ProcessorCount);
+
+        /// <inheritdoc cref="IsCanonicalFrameMemory(ReadOnlyMemory{byte}, int, int, int, double)"/>
+        /// <param name="innerDegreeOfParallelism">Worker count for the per-row cell search; one is serial.</param>
+        public static bool IsCanonicalFrameMemory(ReadOnlyMemory<byte> frame, int width, int height, int borderWidth, double canonicalFraction, int innerDegreeOfParallelism)
         {
             bool isRgba = frame.Length == width * height * 4;
             int bytesPerPixel = isRgba ? 4 : 3;
@@ -138,7 +151,7 @@ namespace YTAHD.Core.Core
             if (totalCells <= 0) return false;
 
             int homeDominantCount = 0;
-            Parallel.For(0, blocksY, blockY =>
+            InnerLoopParallelism.ForEachRow(blocksY, innerDegreeOfParallelism, blockY =>
             {
                 int localHomeDominantCount = 0;
                 for (int blockX = 0; blockX < blocksX; blockX++)

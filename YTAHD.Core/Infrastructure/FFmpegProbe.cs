@@ -50,14 +50,19 @@ namespace YTAHD.Core.Infrastructure
                         RedirectStandardError = true
                     };
 
-                    using var process = Process.Start(psi);
-                    if (process != null)
+                    using var child = ChildProcessScope.Start(psi, "Failed to start ffprobe.");
+                    var process = child.Process;
+
+                    // Both pipes are redirected, so both must be consumed before waiting;
+                    // ffprobe -version is short, but an unwritten rule here would be a latent
+                    // deadlock the moment a build emits a longer banner.
+                    var stdout = ChildProcessPipes.ReadToEndAsync(process.StandardOutput);
+                    var stderr = ChildProcessPipes.ReadToEndAsync(process.StandardError);
+                    process.WaitForExit();
+                    System.Threading.Tasks.Task.WaitAll(stdout, stderr);
+                    if (process.ExitCode == 0)
                     {
-                        process.WaitForExit();
-                        if (process.ExitCode == 0)
-                        {
-                            return candidate;
-                        }
+                        return candidate;
                     }
                 }
                 catch
@@ -166,14 +171,13 @@ namespace YTAHD.Core.Infrastructure
 
             try
             {
-                using var process = Process.Start(psi);
-                if (process == null)
-                {
-                    return 0;
-                }
+                using var child = ChildProcessScope.Start(psi, "Failed to start ffprobe.");
+                var process = child.Process;
 
-                var output = await process.StandardOutput.ReadToEndAsync();
+                var stderrDrain = ChildProcessPipes.DrainAsync(process.StandardError);
+                var output = await ChildProcessPipes.ReadToEndAsync(process.StandardOutput);
                 await process.WaitForExitAsync();
+                await stderrDrain;
                 return ParseFrameCountFromProbeOutput(output);
             }
             catch

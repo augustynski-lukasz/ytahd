@@ -7,6 +7,13 @@ internal static class Program
 {
     public static int Main(string[] args)
     {
+        // `bench` selects the real-FFmpeg serial-vs-parallel benchmark; every other invocation
+        // keeps the original capacity/overhead calculation behaviour.
+        if (args.Length > 0 && string.Equals(args[0], "bench", StringComparison.OrdinalIgnoreCase))
+        {
+            return RunBenchmarkAsync(args[1..]).GetAwaiter().GetResult();
+        }
+
         try
         {
             var options = PerfOptions.Parse(args);
@@ -33,6 +40,49 @@ internal static class Program
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
             Console.Error.WriteLine("Use --help for options.");
+            return 2;
+        }
+    }
+
+    private static async Task<int> RunBenchmarkAsync(string[] args)
+    {
+        if (Array.Exists(args, arg => string.Equals(arg, "--help", StringComparison.OrdinalIgnoreCase)))
+        {
+            BenchmarkReportPrinter.PrintHelp();
+            return 0;
+        }
+
+        try
+        {
+            var options = ParallelBenchmarkOptions.Parse(args);
+            Console.WriteLine("YTAHD parallel pipeline benchmark (real FFmpeg round trips)");
+            Console.WriteLine();
+
+            var runner = new BenchmarkRunner(options, Console.Out);
+            var results = await runner.RunAsync().ConfigureAwait(false);
+
+            BenchmarkReportPrinter.PrintSummary(options, results, Console.Out);
+
+            if (!string.IsNullOrWhiteSpace(options.JsonPath))
+            {
+                await File.WriteAllTextAsync(options.JsonPath, BenchmarkJson.Serialize(options, results)).ConfigureAwait(false);
+                Console.WriteLine($"JSON results written to {options.JsonPath}");
+            }
+
+            foreach (var result in results)
+            {
+                if (!result.PayloadMatches)
+                {
+                    return 1;
+                }
+            }
+
+            return 0;
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            Console.Error.WriteLine("Use 'YTAHD.Perf bench --help' for options.");
             return 2;
         }
     }

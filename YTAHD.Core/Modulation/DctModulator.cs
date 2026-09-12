@@ -1,5 +1,4 @@
 using System;
-using System.Threading.Tasks;
 using YTAHD.Core.Infrastructure;
 
 namespace YTAHD.Core.Modulation
@@ -12,14 +11,17 @@ namespace YTAHD.Core.Modulation
     /// gradients that video codecs preserve with high fidelity.
     /// On decode, a forward DCT recovers the coefficient signs.
     /// </summary>
-    public sealed class DctModulator : IModulator
+    public sealed class DctModulator : IModulator, IParallelismConfigurable
     {
-        private const int BlockSize = DctCarrierBasis.BlockSize;   // 8
+        private const int BlockSize = DctCarrierBasis.BlockSize; // 8
         // 1 byte per 8×8 block (8 carrier positions, 1 bit each).
         private const int BytesPerBlock = 1;
 
         public int MacroblockWidth => BlockSize;
         public int MacroblockHeight => BlockSize;
+
+        /// <inheritdoc />
+        public int InnerDegreeOfParallelism { get; set; } = Environment.ProcessorCount;
 
         public int GetPayloadBytesPerFrame(ModulatorGeometry geometry)
         {
@@ -106,10 +108,10 @@ namespace YTAHD.Core.Modulation
         }
 
         public byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
-            => CreatePhase3Frame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
+            => CreatePhase3Frame(geometry.Width, geometry.Height, geometry.BorderWidth, payload, InnerDegreeOfParallelism);
 
         public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
-            => CreatePhase3Frame(width, height, borderWidth, payload);
+            => CreatePhase3Frame(width, height, borderWidth, payload, InnerDegreeOfParallelism);
 
         /// <summary>
         /// Synthesise a full frame: each 8×8 block carries 8 payload bits via IDCT.
@@ -117,6 +119,15 @@ namespace YTAHD.Core.Modulation
         /// cosine-wave gradients — low-frequency signal that video codecs preserve well.
         /// </summary>
         public static byte[] CreatePhase3Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+            => CreatePhase3Frame(width, height, borderWidth, payload, Environment.ProcessorCount);
+
+        /// <summary>
+        /// Synthesise a full frame using an explicit inner-loop worker count.
+        /// A <paramref name="innerDegreeOfParallelism"/> of one renders block rows serially, which
+        /// the parallel pipeline requests so block rendering does not oversubscribe the machine
+        /// alongside its frame-level workers; values above one are capped only by the row count.
+        /// </summary>
+        public static byte[] CreatePhase3Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload, int innerDegreeOfParallelism)
         {
             if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
             if (borderWidth < 0 || borderWidth > Math.Min(width, height) / 2) throw new ArgumentOutOfRangeException(nameof(borderWidth));
@@ -135,7 +146,7 @@ namespace YTAHD.Core.Modulation
             int blocksX = Math.Max(0, usableWidth / BlockSize);
             int blocksY = Math.Max(0, usableHeight / BlockSize);
 
-            Parallel.For(0, blocksY, blockRow =>
+            InnerLoopParallelism.ForEachRow(blocksY, innerDegreeOfParallelism, blockRow =>
             {
                 for (int blockColumn = 0; blockColumn < blocksX; blockColumn++)
                 {

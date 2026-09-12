@@ -316,9 +316,9 @@ payload is exactly the original payload.
 
 ## Workstream F — Bounded parallel encode/decode pipeline
 
-**Status: F1–F5 complete; F6 not started.**
+**Status: F1–F6 complete.**
 **Design ADR:** `CR-20260911-06-bounded-parallel-pipeline-plan.md` (`Implemented`).
-**Backlog items:** performance validation matrix.
+**Backlog items:** none open.
 
 Goal: increase throughput without weakening the video protocol contract. FFmpeg pipe I/O
 stays ordered; CPU-heavy frame construction and frame decoding become parallel only behind
@@ -376,7 +376,7 @@ constraint because one 4K RGB frame is about 24 MB and one 4K RGBA frame is abou
 - Tests: fake-wrapper order assertions, render-failure no-hang regression, serial/parallel
   equivalence, and the existing real FFmpeg round trips.
 
-### F5. Bounded ordered decode pipeline
+### F5. Bounded ordered decode pipeline — done
 
 - Split decode into a sequential FFmpeg stdout reader, N packet decode workers, and one
   ordered aggregator.
@@ -390,12 +390,31 @@ constraint because one 4K RGB frame is about 24 MB and one 4K RGBA frame is abou
 - Tests: serial/parallel equivalence, ordered progress, cancellation, duplicate/canonical
   sequencing, invalid-packet metrics, and the existing real FFmpeg Phase 1–4 coverage.
 
-### F6. Performance validation and tuning
+### F6. Performance validation and tuning — done
 
-- Add benchmark modes or scripts for serial vs. parallel comparisons by modulator and payload
-  size.
-- Track throughput, CPU utilization, peak memory, FFmpeg wait time, and output correctness.
-- Tune default concurrency to avoid starving FFmpeg/libx264, which already uses CPU threads.
+- Added a real-FFmpeg serial-vs-parallel benchmark mode (`YTAHD.Perf bench`) with a JSON output
+  path for cross-machine comparison. See ADR `CR-20260912-02-pipeline-performance-validation.md`.
+- Tracked throughput, managed pipeline CPU time, FFmpeg stdin/stdout wait share, peak working
+  set, peak managed heap, output size, and byte-for-byte recovery.
+- Added a real-codec degree-of-parallelism matrix over phase1–phase4 and every `--jobs` setting
+  (`YTAHD.Tests/ParallelPipelineRealCodecTests.cs`), asserting byte-exact payload recovery,
+  frame-count and per-frame payload invariance versus the serial baseline, identical frame
+  sequences, and cancellation.
+- Tuned default concurrency: `ParallelismPolicy.AutoWorkerCap` stays at `4` on the measured
+  evidence, leaving a processor of headroom so libx264 (which already saturates the machine) is
+  not starved.
+- Resolved the suite-wide deadlock that blocked the matrix from running: nested blocking
+  `Parallel.For` with an explicit degree starved the thread pool. See ADR
+  `CR-20260912-03-inner-loop-thread-pool-starvation.md`.
+- Resolved the residual intermittent post-run hang: child-process pipe reads emulated as async
+  parked a thread-pool thread per in-flight ffmpeg child, starving the pool under concurrent
+  round trips, and child teardown was not deterministic. See ADR
+  `CR-20260912-04-child-pipe-thread-pool-starvation.md`.
+- Resolved the parallel decode's result-slot deadlock (same hang signature): slots were
+  acquired by workers after decoding but released only on in-order aggregation, so a slow head
+  frame could be stranded by later frames holding every slot. Slots are now reserved in the
+  reader in sequence order. See ADR
+  `CR-20260912-04-child-pipe-thread-pool-starvation.md`.
 
 ---
 

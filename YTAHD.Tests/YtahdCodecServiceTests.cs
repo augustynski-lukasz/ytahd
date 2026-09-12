@@ -11,61 +11,7 @@ namespace YTAHD.Tests
 {
     public class YtahdCodecServiceTests
     {
-        private static string? GetAvailableFfmpegPath()
-        {
-            var candidates = new[]
-            {
-                "D:\\!Tools\\ffmpeg-20151019\\bin\\ffmpeg.exe",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ffmpeg", "bin", "ffmpeg.exe"),
-                "ffmpeg.exe",
-                "ffmpeg"
-            };
-
-            foreach (var candidate in candidates)
-            {
-                if (string.IsNullOrWhiteSpace(candidate))
-                {
-                    continue;
-                }
-
-                if (candidate.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase) || candidate.Equals("ffmpeg.exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        var psi = new System.Diagnostics.ProcessStartInfo(candidate, "-version")
-                        {
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true
-                        };
-
-                        using var process = System.Diagnostics.Process.Start(psi);
-                        if (process != null)
-                        {
-                            process.WaitForExit();
-                            if (process.ExitCode == 0)
-                            {
-                                return candidate;
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Try the next candidate.
-                    }
-
-                    continue;
-                }
-
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            return null;
-        }
+        private static string? GetAvailableFfmpegPath() => TestFfmpeg.GetAvailableFfmpegPath();
 
         [Fact]
         public async Task FFmpegWrapper_UsesExplicitExecutablePath_WhenProvided()

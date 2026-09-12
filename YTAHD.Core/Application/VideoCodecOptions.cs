@@ -19,7 +19,13 @@ public class VideoCodecOptions
     public bool UseAudioClock { get; init; } = false;
 
     /// <summary>
-    /// Maximum number of frame-rendering workers. Zero selects the serial default.
+    /// Requested degree of parallelism for the encode/decode frame pipeline, resolved by
+    /// <see cref="ParallelismPolicy"/> (see docs/decisions/CR-20260912-01-degree-of-parallelism-controls.md).
+    /// <c>0</c> is the unconfigured default: frames are processed sequentially and modulator/decoder
+    /// inner loops still use the machine's processors. <see cref="ParallelismPolicy.Auto"/> (-1)
+    /// chooses a conservative worker count, higher values request that many frame workers
+    /// (clamped to <see cref="ParallelismPolicy.MaxWorkerLimit"/>), and <c>1</c> runs fully serial
+    /// — frame workers and inner loops — for deterministic debugging.
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; } = 0;
 }

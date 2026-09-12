@@ -32,7 +32,10 @@ namespace YTAHD.Core.Core
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
         private readonly bool _useAudioClock;
+        /// <summary>Resolved worker count from <see cref="ParallelismPolicy"/>; <c>1</c> selects the serial path.</summary>
         private readonly int _maxDegreeOfParallelism;
+        /// <summary>The degree of parallelism as configured, before resolution.</summary>
+        private readonly int _requestedDegreeOfParallelism;
 
         public EncodeMetrics LastEncodeMetrics { get; private set; } = new();
 
@@ -47,7 +50,8 @@ namespace YTAHD.Core.Core
             _useDurabilityMatrix = false;
             _durabilityMatrixOptions = null;
             _useAudioClock = false;
-            _maxDegreeOfParallelism = 0;
+            _maxDegreeOfParallelism = ParallelismPolicy.Resolve(0);
+            _requestedDegreeOfParallelism = 0;
         }
 
         public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
@@ -56,9 +60,8 @@ namespace YTAHD.Core.Core
             _useDurabilityMatrix = options.UseDurabilityMatrix;
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
             _useAudioClock = options.UseAudioClock;
-            if (options.MaxDegreeOfParallelism < 0)
-                throw new ArgumentOutOfRangeException(nameof(options.MaxDegreeOfParallelism), "Maximum degree of parallelism cannot be negative.");
-            _maxDegreeOfParallelism = options.MaxDegreeOfParallelism;
+            _maxDegreeOfParallelism = ParallelismPolicy.Resolve(options.MaxDegreeOfParallelism);
+            _requestedDegreeOfParallelism = options.MaxDegreeOfParallelism;
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -100,10 +103,7 @@ namespace YTAHD.Core.Core
         public async Task EncodeAsync(string inputFile, string outputVideo, CancellationToken cancellationToken = default)
         {
             var totalStopwatch = Stopwatch.StartNew();
-            double packetBuildMilliseconds = 0d;
-            double frameRenderMilliseconds = 0d;
-            double rgbConversionMilliseconds = 0d;
-            double ffmpegWriteMilliseconds = 0d;
+            var timings = new EncodeTimings();
 
             if (!File.Exists(inputFile))
                 throw new FileNotFoundException("Input file not found", inputFile);
@@ -128,7 +128,7 @@ namespace YTAHD.Core.Core
                 var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
                 framePackets = durabilityCodec.EncodeToFramePackets(data).ToArray();
                 packetStopwatch.Stop();
-                packetBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
+                timings.PacketBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
                 totalDataFrames = framePackets.Length;
             }
             else
@@ -147,11 +147,15 @@ namespace YTAHD.Core.Core
                 TotalFramesInVideo = 0
             };
 
+            // Logical frame count: data frames plus (unless the durability matrix supplies its own
+            // redundancy) one XOR parity frame per group. Shared by the audio clock track and the
+            // worker-budget split below.
+            int parityFrameCount = _useDurabilityMatrix ? 0 : (totalDataFrames + DataFramesPerParityGroup - 1) / DataFramesPerParityGroup;
+            int totalLogicalFrames = totalDataFrames + parityFrameCount;
+
             string? audioPcmFilePath = null;
             if (_useAudioClock)
             {
-                int parityFrameCount = _useDurabilityMatrix ? 0 : (totalDataFrames + DataFramesPerParityGroup - 1) / DataFramesPerParityGroup;
-                int totalLogicalFrames = totalDataFrames + parityFrameCount;
                 var emissionForAudio = _modulator as IFrameEmissionStrategy;
                 int physicalFramesPerLogicalFrame = (emissionForAudio?.RepeatCount ?? 3) + (emissionForAudio?.UsesCanonicalSeparator == true ? 1 : 0);
 
@@ -167,107 +171,58 @@ namespace YTAHD.Core.Core
             var stdin = ff.StandardInput;
             DebugTrace.Log("EncoderEngine", $"FFmpeg process started; totalDataFrames={totalDataFrames} totalFramesWritten target={totalFramesWritten}");
 
-            int workerCount = _maxDegreeOfParallelism > 0 ? _maxDegreeOfParallelism : 1;
-            var packetChannel = Channel.CreateBounded<(int Index, byte[] Packet)>(new BoundedChannelOptions(workerCount * 2)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleWriter = true
-            });
-            var renderedChannel = Channel.CreateBounded<(int Index, byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)>(new BoundedChannelOptions(workerCount * 2)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true
-            });
+            int workerCount = _maxDegreeOfParallelism;
             using var pipelineCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             CancellationToken pipelineToken = pipelineCancellation.Token;
 
-            async Task<(byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)> RenderFramePacketAsync(byte[] framePacket)
-            {
-                var frameGeometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, borderWidth);
-                var renderStopwatch = Stopwatch.StartNew();
-                byte[] rgbaFrame = _modulator.CreateFrame(frameGeometry, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
-                renderStopwatch.Stop();
-                double renderMilliseconds = renderStopwatch.Elapsed.TotalMilliseconds;
+            // The resolved worker count is the whole stage's CPU budget, so it is split rather
+            // than granted twice: with several frame workers the modulator renders block rows
+            // serially, and with a single (or unused) frame worker the inner loop keeps the
+            // machine's processors. Short payloads clamp the split so a one-frame encode still
+            // gets a parallel inner loop.
+            int effectiveFrameWorkers = Math.Min(workerCount, Math.Max(1, totalLogicalFrames));
+            ApplyInnerDegreeOfParallelism(effectiveFrameWorkers);
 
-                var conversionStopwatch = Stopwatch.StartNew();
-                byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
-                conversionStopwatch.Stop();
-                double conversionMilliseconds = conversionStopwatch.Elapsed.TotalMilliseconds;
-
-                byte[]? canonicalRgb = null;
-                var emission = _modulator as IFrameEmissionStrategy;
-                if (emission?.UsesCanonicalSeparator == true)
-                {
-                    renderStopwatch.Restart();
-                    byte[] canonicalRgba = _modulator.CreateFrame(frameGeometry, ReadOnlySpan<byte>.Empty);
-                    renderStopwatch.Stop();
-                    renderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
-
-                    conversionStopwatch.Restart();
-                    canonicalRgb = ConvertRgbaToRgb(canonicalRgba, _width, _height);
-                    conversionStopwatch.Stop();
-                    conversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
-                }
-
-                return (rgbFrame, canonicalRgb, renderMilliseconds, conversionMilliseconds);
-            }
-
-            async Task WriteRenderedFramesAsync()
-            {
-                var pending = new SortedDictionary<int, (byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)>();
-                int nextIndex = 0;
-                try
-                {
-                    await foreach (var rendered in renderedChannel.Reader.ReadAllAsync(pipelineToken))
-                    {
-                        pending[rendered.Index] = (rendered.Rgb, rendered.CanonicalRgb, rendered.RenderMilliseconds, rendered.ConversionMilliseconds);
-                        while (pending.Remove(nextIndex, out var frame))
-                        {
-                            frameRenderMilliseconds += frame.RenderMilliseconds;
-                            rgbConversionMilliseconds += frame.ConversionMilliseconds;
-                            DebugTrace.Log("EncoderEngine", $"Writing logical frame #{nextIndex} modulator={_modulator.GetType().Name}");
-                            var emission = _modulator as IFrameEmissionStrategy;
-                            int repeatCount = emission?.RepeatCount ?? 3;
-                            for (int rep = 0; rep < repeatCount; rep++)
-                            {
-                                var writeStopwatch = Stopwatch.StartNew();
-                                await stdin.WriteAsync(frame.Rgb, 0, frame.Rgb.Length, pipelineToken);
-                                writeStopwatch.Stop();
-                                ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
-                            }
-
-                            if (frame.CanonicalRgb != null)
-                            {
-                                var writeStopwatch = Stopwatch.StartNew();
-                                await stdin.WriteAsync(frame.CanonicalRgb, 0, frame.CanonicalRgb.Length, pipelineToken);
-                                writeStopwatch.Stop();
-                                ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
-                            }
-
-                            nextIndex++;
-                        }
-                    }
-                }
-                catch
-                {
-                    pipelineCancellation.Cancel();
-                    throw;
-                }
-            }
+            var framePlan = new EncodeFramePlan(data, framePackets, totalDataFrames, payloadBytesPerFrame, borderWidth);
 
             try
             {
-                var workers = new List<Task>();
-                for (int worker = 0; worker < workerCount; worker++)
+                if (workerCount <= 1)
                 {
-                    workers.Add(Task.Run(async () =>
+                    // Serial fallback: one logical frame at a time, in stream order, with no worker
+                    // tasks and no channels. Deterministic for debugging and cheap on low-core machines.
+                    totalFramesWritten = await WriteFramesSeriallyAsync(stdin, framePlan, timings, pipelineToken);
+                }
+                else
+                {
+                    // Bounded ordered pipeline: one packet producer, N render workers, one writer.
+                    var packetChannel = Channel.CreateBounded<(int Index, byte[] Packet)>(new BoundedChannelOptions(workerCount * 2)
                     {
+                        FullMode = BoundedChannelFullMode.Wait,
+                        SingleWriter = true
+                    });
+                    var renderedChannel = Channel.CreateBounded<(int Index, byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)>(new BoundedChannelOptions(workerCount * 2)
+                    {
+                        FullMode = BoundedChannelFullMode.Wait,
+                        SingleReader = true
+                    });
+
+                    async Task WriteRenderedFramesAsync()
+                    {
+                        var pending = new SortedDictionary<int, (byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)>();
+                        int nextIndex = 0;
                         try
                         {
-                            await foreach (var work in packetChannel.Reader.ReadAllAsync(pipelineToken))
+                            await foreach (var rendered in renderedChannel.Reader.ReadAllAsync(pipelineToken))
                             {
-                                var rendered = await RenderFramePacketAsync(work.Packet);
-                                await renderedChannel.Writer.WriteAsync((work.Index, rendered.Rgb, rendered.CanonicalRgb, rendered.RenderMilliseconds, rendered.ConversionMilliseconds), pipelineToken);
+                                pending[rendered.Index] = (rendered.Rgb, rendered.CanonicalRgb, rendered.RenderMilliseconds, rendered.ConversionMilliseconds);
+                                while (pending.Remove(nextIndex, out var frame))
+                                {
+                                    timings.FrameRenderMilliseconds += frame.RenderMilliseconds;
+                                    timings.RgbConversionMilliseconds += frame.ConversionMilliseconds;
+                                    await WriteRenderedFrameAsync(stdin, frame, nextIndex, timings, pipelineToken);
+                                    nextIndex++;
+                                }
                             }
                         }
                         catch
@@ -275,97 +230,75 @@ namespace YTAHD.Core.Core
                             pipelineCancellation.Cancel();
                             throw;
                         }
-                    }));
-                }
-                var writerTask = WriteRenderedFramesAsync();
+                    }
 
-                async Task ProducePacketAsync(byte[] packet)
-                {
-                    await packetChannel.Writer.WriteAsync((totalFramesWritten, packet), pipelineToken);
-                    totalFramesWritten++;
-                }
-
-                async Task ProducePacketsAsync()
-                {
-                    try
+                    var workers = new List<Task>();
+                    for (int worker = 0; worker < workerCount; worker++)
                     {
-                        if (_useDurabilityMatrix)
+                        workers.Add(Task.Run(async () =>
                         {
-                            foreach (var framePacket in framePackets)
+                            try
+                            {
+                                await foreach (var work in packetChannel.Reader.ReadAllAsync(pipelineToken))
+                                {
+                                    var rendered = RenderFramePacket(work.Packet, framePlan.BorderWidth);
+                                    await renderedChannel.Writer.WriteAsync((work.Index, rendered.Rgb, rendered.CanonicalRgb, rendered.RenderMilliseconds, rendered.ConversionMilliseconds), pipelineToken);
+                                }
+                            }
+                            catch
+                            {
+                                pipelineCancellation.Cancel();
+                                throw;
+                            }
+                        }));
+                    }
+                    var writerTask = WriteRenderedFramesAsync();
+
+                    async Task ProducePacketAsync(byte[] packet)
+                    {
+                        await packetChannel.Writer.WriteAsync((totalFramesWritten, packet), pipelineToken);
+                        totalFramesWritten++;
+                    }
+
+                    async Task ProducePacketsAsync()
+                    {
+                        try
+                        {
+                            foreach (var framePacket in EnumerateFramePackets(framePlan, timings))
                             {
                                 await ProducePacketAsync(framePacket);
                             }
                         }
-                        else
+                        catch
                         {
-                            int dataOffset = 0;
-                            for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
-                            {
-                                int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
-                                var parityPayload = new byte[payloadBytesPerFrame];
-
-                                for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
-                                {
-                                    var packetStopwatch = Stopwatch.StartNew();
-                                    int frameIdx = groupStart + idxInGroup;
-                                    int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
-                                    var payload = new byte[payloadBytesPerFrame];
-                                    if (payloadLen > 0)
-                                    {
-                                        Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
-                                    }
-
-                                    for (int i = 0; i < payloadBytesPerFrame; i++)
-                                    {
-                                        parityPayload[i] ^= payload[i];
-                                    }
-
-                                    var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
-                                    packetStopwatch.Stop();
-                                    packetBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
-                                    await ProducePacketAsync(framePacket);
-                                    dataOffset += payloadLen;
-                                }
-
-                                var parityStopwatch = Stopwatch.StartNew();
-                                var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
-                                parityStopwatch.Stop();
-                                packetBuildMilliseconds += parityStopwatch.Elapsed.TotalMilliseconds;
-                                await ProducePacketAsync(parityPacket);
-                            }
+                            pipelineCancellation.Cancel();
+                            throw;
+                        }
+                        finally
+                        {
+                            packetChannel.Writer.TryComplete();
                         }
                     }
-                    catch
-                    {
-                        pipelineCancellation.Cancel();
-                        throw;
-                    }
-                    finally
-                    {
-                        packetChannel.Writer.TryComplete();
-                    }
-                }
 
-                var producerTask = ProducePacketsAsync();
-                var workerTask = Task.WhenAll(workers);
-                var workerCompletionTask = workerTask.ContinueWith(
-                    _ => renderedChannel.Writer.TryComplete(),
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-                await Task.WhenAll(producerTask, workerTask, workerCompletionTask, writerTask);
+                    var producerTask = ProducePacketsAsync();
+                    var workerTask = Task.WhenAll(workers);
+                    var workerCompletionTask = workerTask.ContinueWith(
+                        _ => renderedChannel.Writer.TryComplete(),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                    await Task.WhenAll(producerTask, workerTask, workerCompletionTask, writerTask);
+                }
             }
             finally
             {
                 pipelineCancellation.Cancel();
-                packetChannel.Writer.TryComplete();
-                renderedChannel.Writer.TryComplete();
                 try
                 {
                     var flushStopwatch = Stopwatch.StartNew();
                     await stdin.FlushAsync();
                     flushStopwatch.Stop();
-                    ffmpegWriteMilliseconds += flushStopwatch.Elapsed.TotalMilliseconds;
+                    timings.FfmpegWriteMilliseconds += flushStopwatch.Elapsed.TotalMilliseconds;
                 }
                 catch { }
 
@@ -395,12 +328,177 @@ namespace YTAHD.Core.Core
                 TotalFramesWritten = totalFramesWritten,
                 TotalFramesInVideo = actualFramesInVideo > 0 ? actualFramesInVideo : totalFramesWritten,
                 TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds,
-                PacketBuildMilliseconds = packetBuildMilliseconds,
-                FrameRenderMilliseconds = frameRenderMilliseconds,
-                RgbConversionMilliseconds = rgbConversionMilliseconds,
-                FfmpegWriteMilliseconds = ffmpegWriteMilliseconds
+                PacketBuildMilliseconds = timings.PacketBuildMilliseconds,
+                FrameRenderMilliseconds = timings.FrameRenderMilliseconds,
+                RgbConversionMilliseconds = timings.RgbConversionMilliseconds,
+                FfmpegWriteMilliseconds = timings.FfmpegWriteMilliseconds
             };
         }
+
+        /// <summary>
+        /// Renders one logical frame packet into RGB (plus the canonical separator frame when the
+        /// modulator emits one) and reports the render and RGB-conversion timings.
+        /// </summary>
+        private (byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds) RenderFramePacket(byte[] framePacket, int borderWidth)
+        {
+            var frameGeometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, borderWidth);
+            var renderStopwatch = Stopwatch.StartNew();
+            byte[] rgbaFrame = _modulator.CreateFrame(frameGeometry, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
+            renderStopwatch.Stop();
+            double renderMilliseconds = renderStopwatch.Elapsed.TotalMilliseconds;
+
+            var conversionStopwatch = Stopwatch.StartNew();
+            byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
+            conversionStopwatch.Stop();
+            double conversionMilliseconds = conversionStopwatch.Elapsed.TotalMilliseconds;
+
+            byte[]? canonicalRgb = null;
+            var emission = _modulator as IFrameEmissionStrategy;
+            if (emission?.UsesCanonicalSeparator == true)
+            {
+                renderStopwatch.Restart();
+                byte[] canonicalRgba = _modulator.CreateFrame(frameGeometry, ReadOnlySpan<byte>.Empty);
+                renderStopwatch.Stop();
+                renderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
+
+                conversionStopwatch.Restart();
+                canonicalRgb = ConvertRgbaToRgb(canonicalRgba, _width, _height);
+                conversionStopwatch.Stop();
+                conversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
+            }
+
+            return (rgbFrame, canonicalRgb, renderMilliseconds, conversionMilliseconds);
+        }
+
+        /// <summary>
+        /// Writes one rendered logical frame to FFmpeg: the physical emission repeats first, then
+        /// the canonical separator frame when present. Shared by the serial and parallel paths so
+        /// both produce identical stream ordering.
+        /// </summary>
+        private async Task WriteRenderedFrameAsync(
+            Stream stdin,
+            (byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds) frame,
+            int frameIndex,
+            EncodeTimings timings,
+            CancellationToken cancellationToken)
+        {
+            DebugTrace.Log("EncoderEngine", $"Writing logical frame #{frameIndex} modulator={_modulator.GetType().Name}");
+            int repeatCount = (_modulator as IFrameEmissionStrategy)?.RepeatCount ?? 3;
+            for (int rep = 0; rep < repeatCount; rep++)
+            {
+                var writeStopwatch = Stopwatch.StartNew();
+                await stdin.WriteAsync(frame.Rgb, 0, frame.Rgb.Length, cancellationToken);
+                writeStopwatch.Stop();
+                timings.FfmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
+            }
+
+            if (frame.CanonicalRgb != null)
+            {
+                var writeStopwatch = Stopwatch.StartNew();
+                await stdin.WriteAsync(frame.CanonicalRgb, 0, frame.CanonicalRgb.Length, cancellationToken);
+                writeStopwatch.Stop();
+                timings.FfmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
+            }
+        }
+
+        /// <summary>
+        /// Serial encode path: render and write one logical frame at a time in stream order. Used
+        /// whenever the resolved degree of parallelism is one (see <see cref="ParallelismPolicy"/>)
+        /// so debugging is deterministic and single-core machines avoid thread-pool overhead.
+        /// </summary>
+        /// <summary>
+        /// Splits the resolved worker budget between the frame-level pipeline and the modulator's
+        /// inner loop (see <see cref="ParallelismPolicy.ResolveInnerDegree(int, int)"/>). No-op for
+        /// modulators that do not expose inner-loop parallelism.
+        /// </summary>
+        private void ApplyInnerDegreeOfParallelism(int frameWorkers)
+        {
+            if (_modulator is IParallelismConfigurable configurable)
+            {
+                configurable.InnerDegreeOfParallelism = ParallelismPolicy.ResolveInnerDegree(_requestedDegreeOfParallelism, frameWorkers);
+            }
+        }
+
+        private async Task<int> WriteFramesSeriallyAsync(Stream stdin, EncodeFramePlan plan, EncodeTimings timings, CancellationToken cancellationToken)
+        {
+            int framesWritten = 0;
+            foreach (var framePacket in EnumerateFramePackets(plan, timings))
+            {
+                var rendered = RenderFramePacket(framePacket, plan.BorderWidth);
+                timings.FrameRenderMilliseconds += rendered.RenderMilliseconds;
+                timings.RgbConversionMilliseconds += rendered.ConversionMilliseconds;
+                await WriteRenderedFrameAsync(stdin, rendered, framesWritten, timings, cancellationToken);
+                framesWritten++;
+            }
+
+            return framesWritten;
+        }
+
+        /// <summary>
+        /// Produces the ordered logical frame packets for a payload: either the durability matrix
+        /// packets, or data packets interleaved with one parity packet per group. Shared by the
+        /// serial and parallel paths so packet content and order cannot drift apart.
+        /// </summary>
+        private IEnumerable<byte[]> EnumerateFramePackets(EncodeFramePlan plan, EncodeTimings timings)
+        {
+            if (_useDurabilityMatrix)
+            {
+                foreach (var framePacket in plan.FramePackets)
+                {
+                    yield return framePacket;
+                }
+
+                yield break;
+            }
+
+            int dataOffset = 0;
+            for (int groupStart = 0; groupStart < plan.TotalDataFrames; groupStart += DataFramesPerParityGroup)
+            {
+                int groupCount = Math.Min(DataFramesPerParityGroup, plan.TotalDataFrames - groupStart);
+                var parityPayload = new byte[plan.PayloadBytesPerFrame];
+
+                for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
+                {
+                    var packetStopwatch = Stopwatch.StartNew();
+                    int frameIdx = groupStart + idxInGroup;
+                    int payloadLen = Math.Min(plan.PayloadBytesPerFrame, plan.Data.Length - dataOffset);
+                    var payload = new byte[plan.PayloadBytesPerFrame];
+                    if (payloadLen > 0)
+                    {
+                        Buffer.BlockCopy(plan.Data, dataOffset, payload, 0, payloadLen);
+                    }
+
+                    for (int i = 0; i < plan.PayloadBytesPerFrame; i++)
+                    {
+                        parityPayload[i] ^= payload[i];
+                    }
+
+                    var framePacket = CreateDataFramePacket(frameIdx, plan.TotalDataFrames, groupStart, groupCount, payloadLen, payload, plan.PayloadBytesPerFrame);
+                    packetStopwatch.Stop();
+                    timings.PacketBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
+                    dataOffset += payloadLen;
+                    yield return framePacket;
+                }
+
+                var parityStopwatch = Stopwatch.StartNew();
+                var parityPacket = CreateParityFramePacket(groupStart, groupCount, plan.TotalDataFrames, parityPayload);
+                parityStopwatch.Stop();
+                timings.PacketBuildMilliseconds += parityStopwatch.Elapsed.TotalMilliseconds;
+                yield return parityPacket;
+            }
+        }
+
+        /// <summary>Mutable per-stage timing accumulator shared by the serial and parallel encode paths.</summary>
+        private sealed class EncodeTimings
+        {
+            public double PacketBuildMilliseconds { get; set; }
+            public double FrameRenderMilliseconds { get; set; }
+            public double RgbConversionMilliseconds { get; set; }
+            public double FfmpegWriteMilliseconds { get; set; }
+        }
+
+        /// <summary>Packet-level inputs shared by the serial and parallel encode paths.</summary>
+        private sealed record EncodeFramePlan(byte[] Data, byte[][] FramePackets, int TotalDataFrames, int PayloadBytesPerFrame, int BorderWidth);
 
         /// <summary>
         /// Writes the FSK datagram-clock audio track: a pulse at the start of each logical

@@ -9,6 +9,9 @@ using YTAHD.Core.Core;
 using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
+// Shared help text for --jobs on both the encode and decode commands.
+const string JobsOptionHelp = "Degree of parallelism: 'auto' (default, conservative core-count based workers), 'serial' (fully single-threaded for deterministic runs), '0' (sequential frames; inner loops still use the machine's processors), or an explicit frame worker count. See docs/decisions/CR-20260912-01-degree-of-parallelism-controls.md.";
+
 static IModulator CreateModulator(string mode)
 {
     return mode.Trim().ToLowerInvariant() switch
@@ -30,6 +33,62 @@ static int TryGetVideoFrameCount(string videoPath, string? ffmpegPath)
 static string FormatMilliseconds(double milliseconds)
 {
     return milliseconds.ToString("F1", CultureInfo.InvariantCulture);
+}
+
+static string FormatParallelism(int requested, int resolved)
+{
+    if (requested == ParallelismPolicy.Auto)
+    {
+        return resolved == 1
+            ? "auto->1 (serial fallback: low core count)"
+            : $"auto->{resolved}";
+    }
+
+    if (requested == 1)
+    {
+        // One worker everywhere, including the modulator/decoder inner loops.
+        return "serial";
+    }
+
+    if (requested == 0)
+    {
+        return resolved == 1
+            ? "default->1 (no frame parallelism)"
+            : $"default->{resolved}";
+    }
+
+    return $"{requested}->{resolved}";
+}
+
+static bool TryParseJobs(string? value, out int requested, out string? error)
+{
+    requested = 0;
+    error = null;
+
+    var trimmed = (value ?? string.Empty).Trim();
+    if (trimmed.Length == 0 || string.Equals(trimmed, "auto", StringComparison.OrdinalIgnoreCase))
+    {
+        requested = ParallelismPolicy.Auto;
+        return true;
+    }
+
+    if (string.Equals(trimmed, "serial", StringComparison.OrdinalIgnoreCase))
+    {
+        // Fully serial: one frame worker and serial inner loops, for deterministic debugging.
+        requested = 1;
+        return true;
+    }
+
+    if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0)
+    {
+        // Values above ParallelismPolicy.MaxWorkerLimit are clamped by the policy and reported
+        // in the resolved count rather than rejected.
+        requested = parsed;
+        return true;
+    }
+
+    error = $"Invalid --jobs value '{value}'. Use 'auto', 'serial', or a non-negative worker count.";
+    return false;
 }
 
 static IProgress<DecodeProgress> CreateDecodeProgressReporter()
@@ -69,6 +128,7 @@ var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerat
 var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase3", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
 var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "-F" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
 var optAudioClock = new Option<bool>(new[] { "--audio-clock", "-A" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
+var optJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
@@ -76,6 +136,7 @@ encodeCommand.AddOption(optFps);
 encodeCommand.AddOption(optModulator);
 encodeCommand.AddOption(optFfmpegPath);
 encodeCommand.AddOption(optAudioClock);
+encodeCommand.AddOption(optJobs);
 
 encodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
@@ -88,9 +149,19 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
     var modulatorName = ctx.ParseResult.GetValueForOption(optModulator) ?? "phase1";
     var ffmpegPath = ctx.ParseResult.GetValueForOption(optFfmpegPath);
     var useAudioClock = ctx.ParseResult.GetValueForOption(optAudioClock);
+    var jobs = ctx.ParseResult.GetValueForOption(optJobs);
+
+    if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
+    {
+        Console.Error.WriteLine(jobsError);
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}] ");
+    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}, parallelism={parallelism}] ");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     var payloadBytes = File.Exists(input.FullName) ? new FileInfo(input.FullName).Length : 0;
     await service.EncodeAsync(new EncodeOptions
@@ -102,12 +173,13 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
         Height = height,
         Fps = fps,
         UseAudioClock = useAudioClock,
+        MaxDegreeOfParallelism = requestedJobs,
         VerifyFfmpeg = true
     });
 
     var metrics = service.LastEncodeMetrics;
     var actualVideoFrames = TryGetVideoFrameCount(output.FullName, ffmpegPath);
-    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}, timingMs={{total={FormatMilliseconds(metrics.TotalElapsedMilliseconds)}, packetBuild={FormatMilliseconds(metrics.PacketBuildMilliseconds)}, render={FormatMilliseconds(metrics.FrameRenderMilliseconds)}, rgb={FormatMilliseconds(metrics.RgbConversionMilliseconds)}, ffmpegWrite={FormatMilliseconds(metrics.FfmpegWriteMilliseconds)}}}");
+    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}, parallelism={parallelism}, timingMs={{total={FormatMilliseconds(metrics.TotalElapsedMilliseconds)}, packetBuild={FormatMilliseconds(metrics.PacketBuildMilliseconds)}, render={FormatMilliseconds(metrics.FrameRenderMilliseconds)}, rgb={FormatMilliseconds(metrics.RgbConversionMilliseconds)}, ffmpegWrite={FormatMilliseconds(metrics.FfmpegWriteMilliseconds)}}}");
 });
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -118,19 +190,38 @@ decodeCommand.AddArgument(decodeOut);
 var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
 var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-path" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
 var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
+var decodeJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);
 decodeCommand.AddOption(decodeAudioClock);
-decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulatorName, string? ffmpegPath, bool useAudioClock) =>
+decodeCommand.AddOption(decodeJobs);
+decodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
+    var input = ctx.ParseResult.GetValueForArgument(decodeIn);
+    var output = ctx.ParseResult.GetValueForArgument(decodeOut);
+    var modulatorName = ctx.ParseResult.GetValueForOption(decodeModulator) ?? "phase1";
+    var ffmpegPath = ctx.ParseResult.GetValueForOption(decodeFfmpegPath);
+    var useAudioClock = ctx.ParseResult.GetValueForOption(decodeAudioClock);
+    var jobs = ctx.ParseResult.GetValueForOption(decodeJobs);
+
+    if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
+    {
+        Console.Error.WriteLine(jobsError);
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
+
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}]");
+    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}, parallelism={parallelism}]");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     await service.DecodeAsync(new DecodeOptions
     {
         InputVideo = input.FullName,
         OutputFile = output.FullName,
         UseAudioClock = useAudioClock,
+        MaxDegreeOfParallelism = requestedJobs,
         VerifyFfmpeg = true,
         Progress = CreateDecodeProgressReporter()
     });
@@ -139,10 +230,10 @@ decodeCommand.SetHandler(async (FileInfo input, FileInfo output, string modulato
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
     var totalVideoFrames = TryGetVideoFrameCount(input.FullName, ffmpegPath);
     var completionPercentage = totalVideoFrames > 0 ? Math.Min(100d, decodeMetrics.TotalFramesSeen * 100d / totalVideoFrames).ToString("F1", CultureInfo.InvariantCulture) + "%" : "n/a";
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
-}, decodeIn, decodeOut, decodeModulator, decodeFfmpegPath, decodeAudioClock);
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, parallelism={parallelism}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
+});
 
 root.AddCommand(encodeCommand);
 root.AddCommand(decodeCommand);
 
-await root.InvokeAsync(args);
+return await root.InvokeAsync(args);

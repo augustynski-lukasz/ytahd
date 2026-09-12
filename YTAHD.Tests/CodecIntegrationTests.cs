@@ -12,60 +12,7 @@ namespace YTAHD.Tests
 {
     public sealed class CodecIntegrationTests
     {
-        private static string? GetAvailableFfmpegPath()
-        {
-            var candidates = new[]
-            {
-                "D:\\!Tools\\ffmpeg-20151019\\bin\\ffmpeg.exe",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ffmpeg", "bin", "ffmpeg.exe"),
-                "ffmpeg.exe",
-                "ffmpeg"
-            };
-
-            foreach (var candidate in candidates)
-            {
-                if (string.IsNullOrWhiteSpace(candidate))
-                {
-                    continue;
-                }
-
-                if (candidate.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase) || candidate.Equals("ffmpeg.exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        var psi = new ProcessStartInfo(candidate, "-version")
-                        {
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true
-                        };
-
-                        using var process = Process.Start(psi);
-                        if (process != null)
-                        {
-                            process.WaitForExit();
-                            if (process.ExitCode == 0)
-                            {
-                                return candidate;
-                            }
-                        }
-                    }
-                    catch
-                    {
-                    }
-
-                    continue;
-                }
-
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            return null;
-        }
+        private static string? GetAvailableFfmpegPath() => TestFfmpeg.GetAvailableFfmpegPath();
 
         [Fact]
         public void BinaryGridFrameBitDecoder_Parses_Valid_Header_From_Real_Libx264_Frame()
