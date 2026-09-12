@@ -3,6 +3,8 @@ using System.Buffers;
 using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
+using System.Threading.Channels;
+using System.Threading;
 using System.Threading.Tasks;
 using SkiaSharp;
 using YTAHD.Core.Application;
@@ -30,6 +32,7 @@ namespace YTAHD.Core.Core
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
         private readonly bool _useAudioClock;
+        private readonly int _maxDegreeOfParallelism;
 
         public EncodeMetrics LastEncodeMetrics { get; private set; } = new();
 
@@ -44,6 +47,7 @@ namespace YTAHD.Core.Core
             _useDurabilityMatrix = false;
             _durabilityMatrixOptions = null;
             _useAudioClock = false;
+            _maxDegreeOfParallelism = 0;
         }
 
         public EncoderEngine(IModulator modulator, YTAHD.Core.Infrastructure.IFFmpegWrapper ffmpeg, VideoCodecOptions options)
@@ -52,6 +56,9 @@ namespace YTAHD.Core.Core
             _useDurabilityMatrix = options.UseDurabilityMatrix;
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
             _useAudioClock = options.UseAudioClock;
+            if (options.MaxDegreeOfParallelism < 0)
+                throw new ArgumentOutOfRangeException(nameof(options.MaxDegreeOfParallelism), "Maximum degree of parallelism cannot be negative.");
+            _maxDegreeOfParallelism = options.MaxDegreeOfParallelism;
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -90,7 +97,7 @@ namespace YTAHD.Core.Core
             return await FFmpegProbe.GetVideoFrameCountAsync(videoPath, _ffmpeg.ExecutablePath);
         }
 
-        public async Task EncodeAsync(string inputFile, string outputVideo)
+        public async Task EncodeAsync(string inputFile, string outputVideo, CancellationToken cancellationToken = default)
         {
             var totalStopwatch = Stopwatch.StartNew();
             double packetBuildMilliseconds = 0d;
@@ -160,103 +167,199 @@ namespace YTAHD.Core.Core
             var stdin = ff.StandardInput;
             DebugTrace.Log("EncoderEngine", $"FFmpeg process started; totalDataFrames={totalDataFrames} totalFramesWritten target={totalFramesWritten}");
 
-            async Task WriteFramePacketAsync(byte[] framePacket)
+            int workerCount = _maxDegreeOfParallelism > 0 ? _maxDegreeOfParallelism : 1;
+            var packetChannel = Channel.CreateBounded<(int Index, byte[] Packet)>(new BoundedChannelOptions(workerCount * 2)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = true
+            });
+            var renderedChannel = Channel.CreateBounded<(int Index, byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)>(new BoundedChannelOptions(workerCount * 2)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true
+            });
+            using var pipelineCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            CancellationToken pipelineToken = pipelineCancellation.Token;
+
+            async Task<(byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)> RenderFramePacketAsync(byte[] framePacket)
             {
                 var frameGeometry = new ModulatorGeometry(_width, _height, _macroblockSize, HeaderBytes, borderWidth);
                 var renderStopwatch = Stopwatch.StartNew();
                 byte[] rgbaFrame = _modulator.CreateFrame(frameGeometry, framePacket.AsSpan(0, Math.Min(framePacket.Length, _width * _height * 4)));
                 renderStopwatch.Stop();
-                frameRenderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
+                double renderMilliseconds = renderStopwatch.Elapsed.TotalMilliseconds;
 
                 var conversionStopwatch = Stopwatch.StartNew();
                 byte[] rgbFrame = ConvertRgbaToRgb(rgbaFrame, _width, _height);
                 conversionStopwatch.Stop();
-                rgbConversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
-                DebugTrace.Log("EncoderEngine", $"Writing packet length={framePacket.Length} rgba={rgbaFrame.Length} rgb={rgbFrame.Length} modulator={_modulator.GetType().Name}");
+                double conversionMilliseconds = conversionStopwatch.Elapsed.TotalMilliseconds;
 
+                byte[]? canonicalRgb = null;
                 var emission = _modulator as IFrameEmissionStrategy;
-                int repeatCount = emission?.RepeatCount ?? 3;
-                for (int rep = 0; rep < repeatCount; rep++)
-                {
-                    var writeStopwatch = Stopwatch.StartNew();
-                    await stdin.WriteAsync(rgbFrame, 0, rgbFrame.Length);
-                    writeStopwatch.Stop();
-                    ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
-                }
-
                 if (emission?.UsesCanonicalSeparator == true)
                 {
                     renderStopwatch.Restart();
                     byte[] canonicalRgba = _modulator.CreateFrame(frameGeometry, ReadOnlySpan<byte>.Empty);
                     renderStopwatch.Stop();
-                    frameRenderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
+                    renderMilliseconds += renderStopwatch.Elapsed.TotalMilliseconds;
 
                     conversionStopwatch.Restart();
-                    byte[] canonicalRgb = ConvertRgbaToRgb(canonicalRgba, _width, _height);
+                    canonicalRgb = ConvertRgbaToRgb(canonicalRgba, _width, _height);
                     conversionStopwatch.Stop();
-                    rgbConversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
+                    conversionMilliseconds += conversionStopwatch.Elapsed.TotalMilliseconds;
+                }
 
-                    DebugTrace.Log("EncoderEngine", $"Writing canonical separator frame modulator={_modulator.GetType().Name}");
-                    var writeStopwatch = Stopwatch.StartNew();
-                    await stdin.WriteAsync(canonicalRgb, 0, canonicalRgb.Length);
-                    writeStopwatch.Stop();
-                    ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
+                return (rgbFrame, canonicalRgb, renderMilliseconds, conversionMilliseconds);
+            }
+
+            async Task WriteRenderedFramesAsync()
+            {
+                var pending = new SortedDictionary<int, (byte[] Rgb, byte[]? CanonicalRgb, double RenderMilliseconds, double ConversionMilliseconds)>();
+                int nextIndex = 0;
+                try
+                {
+                    await foreach (var rendered in renderedChannel.Reader.ReadAllAsync(pipelineToken))
+                    {
+                        pending[rendered.Index] = (rendered.Rgb, rendered.CanonicalRgb, rendered.RenderMilliseconds, rendered.ConversionMilliseconds);
+                        while (pending.Remove(nextIndex, out var frame))
+                        {
+                            frameRenderMilliseconds += frame.RenderMilliseconds;
+                            rgbConversionMilliseconds += frame.ConversionMilliseconds;
+                            DebugTrace.Log("EncoderEngine", $"Writing logical frame #{nextIndex} modulator={_modulator.GetType().Name}");
+                            var emission = _modulator as IFrameEmissionStrategy;
+                            int repeatCount = emission?.RepeatCount ?? 3;
+                            for (int rep = 0; rep < repeatCount; rep++)
+                            {
+                                var writeStopwatch = Stopwatch.StartNew();
+                                await stdin.WriteAsync(frame.Rgb, 0, frame.Rgb.Length, pipelineToken);
+                                writeStopwatch.Stop();
+                                ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
+                            }
+
+                            if (frame.CanonicalRgb != null)
+                            {
+                                var writeStopwatch = Stopwatch.StartNew();
+                                await stdin.WriteAsync(frame.CanonicalRgb, 0, frame.CanonicalRgb.Length, pipelineToken);
+                                writeStopwatch.Stop();
+                                ffmpegWriteMilliseconds += writeStopwatch.Elapsed.TotalMilliseconds;
+                            }
+
+                            nextIndex++;
+                        }
+                    }
+                }
+                catch
+                {
+                    pipelineCancellation.Cancel();
+                    throw;
                 }
             }
 
             try
             {
-                if (_useDurabilityMatrix)
+                var workers = new List<Task>();
+                for (int worker = 0; worker < workerCount; worker++)
                 {
-                    foreach (var framePacket in framePackets)
+                    workers.Add(Task.Run(async () =>
                     {
-                        await WriteFramePacketAsync(framePacket);
-                        totalFramesWritten++;
-                    }
-                }
-                else
-                {
-                    int dataOffset = 0;
-                    for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
-                    {
-                        int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
-                        var parityPayload = new byte[payloadBytesPerFrame];
-
-                        for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
+                        try
                         {
-                            var packetStopwatch = Stopwatch.StartNew();
-                            int frameIdx = groupStart + idxInGroup;
-                            int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
-                            var payload = new byte[payloadBytesPerFrame];
-                            if (payloadLen > 0)
+                            await foreach (var work in packetChannel.Reader.ReadAllAsync(pipelineToken))
                             {
-                                Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
+                                var rendered = await RenderFramePacketAsync(work.Packet);
+                                await renderedChannel.Writer.WriteAsync((work.Index, rendered.Rgb, rendered.CanonicalRgb, rendered.RenderMilliseconds, rendered.ConversionMilliseconds), pipelineToken);
                             }
-
-                            for (int i = 0; i < payloadBytesPerFrame; i++)
-                            {
-                                parityPayload[i] ^= payload[i];
-                            }
-
-                            var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
-                            packetStopwatch.Stop();
-                            packetBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
-                            await WriteFramePacketAsync(framePacket);
-                            totalFramesWritten++;
-                            dataOffset += payloadLen;
                         }
+                        catch
+                        {
+                            pipelineCancellation.Cancel();
+                            throw;
+                        }
+                    }));
+                }
+                var writerTask = WriteRenderedFramesAsync();
 
-                        var parityStopwatch = Stopwatch.StartNew();
-                        var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
-                        parityStopwatch.Stop();
-                        packetBuildMilliseconds += parityStopwatch.Elapsed.TotalMilliseconds;
-                        await WriteFramePacketAsync(parityPacket);
-                        totalFramesWritten++;
+                async Task ProducePacketAsync(byte[] packet)
+                {
+                    await packetChannel.Writer.WriteAsync((totalFramesWritten, packet), pipelineToken);
+                    totalFramesWritten++;
+                }
+
+                async Task ProducePacketsAsync()
+                {
+                    try
+                    {
+                        if (_useDurabilityMatrix)
+                        {
+                            foreach (var framePacket in framePackets)
+                            {
+                                await ProducePacketAsync(framePacket);
+                            }
+                        }
+                        else
+                        {
+                            int dataOffset = 0;
+                            for (int groupStart = 0; groupStart < totalDataFrames; groupStart += DataFramesPerParityGroup)
+                            {
+                                int groupCount = Math.Min(DataFramesPerParityGroup, totalDataFrames - groupStart);
+                                var parityPayload = new byte[payloadBytesPerFrame];
+
+                                for (int idxInGroup = 0; idxInGroup < groupCount; idxInGroup++)
+                                {
+                                    var packetStopwatch = Stopwatch.StartNew();
+                                    int frameIdx = groupStart + idxInGroup;
+                                    int payloadLen = Math.Min(payloadBytesPerFrame, data.Length - dataOffset);
+                                    var payload = new byte[payloadBytesPerFrame];
+                                    if (payloadLen > 0)
+                                    {
+                                        Buffer.BlockCopy(data, dataOffset, payload, 0, payloadLen);
+                                    }
+
+                                    for (int i = 0; i < payloadBytesPerFrame; i++)
+                                    {
+                                        parityPayload[i] ^= payload[i];
+                                    }
+
+                                    var framePacket = CreateDataFramePacket(frameIdx, totalDataFrames, groupStart, groupCount, payloadLen, payload, payloadBytesPerFrame);
+                                    packetStopwatch.Stop();
+                                    packetBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
+                                    await ProducePacketAsync(framePacket);
+                                    dataOffset += payloadLen;
+                                }
+
+                                var parityStopwatch = Stopwatch.StartNew();
+                                var parityPacket = CreateParityFramePacket(groupStart, groupCount, totalDataFrames, parityPayload);
+                                parityStopwatch.Stop();
+                                packetBuildMilliseconds += parityStopwatch.Elapsed.TotalMilliseconds;
+                                await ProducePacketAsync(parityPacket);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        pipelineCancellation.Cancel();
+                        throw;
+                    }
+                    finally
+                    {
+                        packetChannel.Writer.TryComplete();
                     }
                 }
+
+                var producerTask = ProducePacketsAsync();
+                var workerTask = Task.WhenAll(workers);
+                var workerCompletionTask = workerTask.ContinueWith(
+                    _ => renderedChannel.Writer.TryComplete(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                await Task.WhenAll(producerTask, workerTask, workerCompletionTask, writerTask);
             }
             finally
             {
+                pipelineCancellation.Cancel();
+                packetChannel.Writer.TryComplete();
+                renderedChannel.Writer.TryComplete();
                 try
                 {
                     var flushStopwatch = Stopwatch.StartNew();

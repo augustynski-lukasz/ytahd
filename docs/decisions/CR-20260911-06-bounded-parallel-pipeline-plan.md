@@ -1,6 +1,6 @@
 # CR-20260911-06 - Bounded Parallel Pipeline Plan
 
-**Date:** 2026-09-11 **Status:** Accepted
+**Date:** 2026-09-11 **Status:** Implemented
 **Area:** Encoder pipeline, decoder pipeline, modulator performance, CLI metrics
 
 ## Context
@@ -29,9 +29,20 @@ round-trip correctness. CPU `libx264` and future GPU encoders can shift bottlene
 pipeline should expose conservative degree-of-parallelism controls and keep serial fallback
 behavior for debugging.
 
+The F4 encode stage implements this contract with bounded packet and rendered-frame channels,
+parallel render workers, and one ordered FFmpeg writer. F5 applies the same shape to RGB decode:
+one sequential reader assigns frame sequence numbers, bounded workers perform only stateless
+packet/canonical decoding, and one ordered aggregator owns duplicate runs, canonical separators,
+parity recovery, output assembly, metrics, and progress. `MaxDegreeOfParallelism = 0` keeps the
+original serial path; positive values bound both queued frame memory and decoded-result memory.
+Producer, worker, aggregator, and caller cancellation share a linked token, and the public decode
+APIs retain their existing call shape while accepting optional cancellation tokens.
+
 ## Consequences
 
-The project gets a path to better throughput without guessing where threads help. The first
-implementation step adds observable timings with little behavioral risk. Later stages add
-more complexity through channels, buffer ownership, and ordered aggregation, so each stage
-needs focused fake-wrapper tests plus real FFmpeg validation before being treated as safe.
+The project gets a path to better throughput without weakening protocol ordering or allowing
+unbounded frame accumulation. F4 preserves ordered writes, physical repeats, Phase 4 canonical
+separators, audio-clock cadence, and serial fallback behavior. F5 preserves ordered aggregation
+and packet acceptance semantics while bounding decode-ahead. Focused regressions cover decode
+equivalence, ordered progress, cancellation, canonical sequencing, and recovery; the remaining
+performance matrix and default-concurrency tuning remain F6 work.

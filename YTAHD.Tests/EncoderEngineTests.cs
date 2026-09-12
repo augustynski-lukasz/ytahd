@@ -161,7 +161,118 @@ namespace YTAHD.Tests
             }
         }
 
-        private sealed class HighCapacityModulator : IModulator
+        [Fact]
+        public async Task Encode_ParallelRenderWorkers_PreservePhysicalFrameCount()
+        {
+            var tmp = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[200_000];
+                new Random(9).NextBytes(data);
+                await File.WriteAllBytesAsync(tmp, data);
+
+                var fake = new FakeFFmpegWrapper(1, 1, 30);
+                var options = new YTAHD.Core.Application.EncodeOptions
+                {
+                    InputFile = tmp,
+                    OutputVideo = "out.mp4",
+                    Width = 1,
+                    Height = 1,
+                    MacroblockSize = 1,
+                    Fps = 30,
+                    VerifyFfmpeg = false,
+                    MaxDegreeOfParallelism = 3
+                };
+                var engine = new EncoderEngine(new HighCapacityModulator(), fake, options);
+
+                await engine.EncodeAsync(tmp, "out.mp4");
+
+                Assert.True(engine.LastEncodeMetrics.TotalDataFrames > 2);
+                Assert.Equal(engine.LastEncodeMetrics.TotalFramesWritten * 3L * 3L, fake.WrittenBytes);
+            }
+            finally
+            {
+                File.Delete(tmp);
+            }
+        }
+
+        [Fact]
+        public async Task Encode_RenderFailure_CancelsPipelineWithoutHanging()
+        {
+            var tmp = Path.GetTempFileName();
+            try
+            {
+                await File.WriteAllBytesAsync(tmp, new byte[200_000]);
+                var fake = new FakeFFmpegWrapper(1, 1, 30);
+                var options = new YTAHD.Core.Application.EncodeOptions
+                {
+                    InputFile = tmp,
+                    OutputVideo = "out.mp4",
+                    Width = 1,
+                    Height = 1,
+                    MacroblockSize = 1,
+                    Fps = 30,
+                    VerifyFfmpeg = false,
+                    MaxDegreeOfParallelism = 3
+                };
+                var engine = new EncoderEngine(new ThrowingRenderModulator(), fake, options);
+
+                var encodeTask = engine.EncodeAsync(tmp, "out.mp4");
+                await Assert.ThrowsAsync<InvalidOperationException>(async () => await encodeTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            }
+            finally
+            {
+                File.Delete(tmp);
+            }
+        }
+
+        [Fact]
+        public async Task Encode_ParallelRendering_MatchesSerialPhysicalOrdering()
+        {
+            var tmp = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[200_000];
+                new Random(11).NextBytes(data);
+                await File.WriteAllBytesAsync(tmp, data);
+
+                var serialFake = new FakeFFmpegWrapper(1, 1, 30);
+                var serialOptions = new YTAHD.Core.Application.EncodeOptions
+                {
+                    InputFile = tmp,
+                    OutputVideo = "serial.mp4",
+                    Width = 1,
+                    Height = 1,
+                    MacroblockSize = 1,
+                    Fps = 30,
+                    VerifyFfmpeg = false,
+                    MaxDegreeOfParallelism = 0
+                };
+                await new EncoderEngine(new HighCapacityModulator(), serialFake, serialOptions).EncodeAsync(tmp, "serial.mp4");
+
+                var parallelFake = new FakeFFmpegWrapper(1, 1, 30);
+                var parallelOptions = new YTAHD.Core.Application.EncodeOptions
+                {
+                    InputFile = tmp,
+                    OutputVideo = "parallel.mp4",
+                    Width = 1,
+                    Height = 1,
+                    MacroblockSize = 1,
+                    Fps = 30,
+                    VerifyFfmpeg = false,
+                    MaxDegreeOfParallelism = 3
+                };
+                await new EncoderEngine(new HighCapacityModulator(), parallelFake, parallelOptions).EncodeAsync(tmp, "parallel.mp4");
+
+                Assert.Equal(serialFake.Process!.Buffer.ToArray(), parallelFake.Process!.Buffer.ToArray());
+            }
+            finally
+            {
+                File.Delete(tmp);
+            }
+        }
+
+        private class HighCapacityModulator : IModulator
         {
             public int MacroblockWidth => 1;
             public int MacroblockHeight => 1;
@@ -212,14 +323,28 @@ namespace YTAHD.Tests
                 return 0;
             }
 
-            public byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+            public virtual byte[] CreateFrame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
             {
-                return new byte[width * height * 4];
+                var frame = new byte[width * height * 4];
+                if (!payload.IsEmpty)
+                {
+                    frame[0] = payload[0];
+                }
+
+                return frame;
             }
 
-            public byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
+            public virtual byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
             {
                 return CreateFrame(geometry.Width, geometry.Height, geometry.BorderWidth, payload);
+            }
+        }
+
+        private sealed class ThrowingRenderModulator : HighCapacityModulator
+        {
+            public override byte[] CreateFrame(ModulatorGeometry geometry, ReadOnlySpan<byte> payload)
+            {
+                throw new InvalidOperationException("render failure");
             }
         }
     }

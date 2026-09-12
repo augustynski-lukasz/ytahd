@@ -316,11 +316,9 @@ payload is exactly the original payload.
 
 ## Workstream F — Bounded parallel encode/decode pipeline
 
-**Status: accepted plan, F1–F3 complete; F4 not started.**
-**Design ADR:** `CR-20260911-06-bounded-parallel-pipeline-plan.md` (`Accepted`; flip to
-`Implemented` only when the ordered parallel pipeline lands).
-**Backlog items:** pipeline timing metrics, Phase 3/4 inner-loop parallelism, bounded ordered
-encode pipeline, bounded ordered decode pipeline, performance validation matrix.
+**Status: F1–F5 complete; F6 not started.**
+**Design ADR:** `CR-20260911-06-bounded-parallel-pipeline-plan.md` (`Implemented`).
+**Backlog items:** performance validation matrix.
 
 Goal: increase throughput without weakening the video protocol contract. FFmpeg pipe I/O
 stays ordered; CPU-heavy frame construction and frame decoding become parallel only behind
@@ -366,14 +364,17 @@ constraint because one 4K RGB frame is about 24 MB and one 4K RGBA frame is abou
 - Tests: Phase 3 carrier/orchestrator regressions, Phase 4 motion/pipeline regressions; real
   FFmpeg matrix remains part of F6.
 
-### F4. Bounded ordered encode pipeline
+### F4. Bounded ordered encode pipeline — done
 
 - Split encode into packet producer, N render workers, and a single ordered FFmpeg writer.
 - Use bounded channels or an equivalent backpressure mechanism so at most a small number of
   4K frames are resident at once.
 - Preserve logical frame order, physical repeat order, canonical separator placement, and
   audio-clock cadence.
-- Tests: fake-wrapper order assertions, memory-bound stress test, real FFmpeg round trips.
+- Added linked cancellation and channel completion on producer, worker, writer, and caller
+  failure paths so bounded waits cannot strand the encode caller.
+- Tests: fake-wrapper order assertions, render-failure no-hang regression, serial/parallel
+  equivalence, and the existing real FFmpeg round trips.
 
 ### F5. Bounded ordered decode pipeline
 
@@ -381,8 +382,13 @@ constraint because one 4K RGB frame is about 24 MB and one 4K RGBA frame is abou
   ordered aggregator.
 - Keep duplicate-run tracking, canonical separator handling, parity recovery, and output
   assembly in the ordered aggregator.
-- Tests: duplicate/canonical sequencing, invalid-packet metrics, progress reporting, real
-  oversized Phase 3 recovery.
+- `VideoCodecOptions.MaxDegreeOfParallelism` controls worker count; `0` retains the serial
+  path. Work and result channels are bounded to a small multiple of the worker count.
+- Linked cancellation propagates reader, worker, aggregator, and caller failures without
+  leaving a bounded channel wait stranded. Decoder entry points retain compatibility and
+  accept optional cancellation tokens.
+- Tests: serial/parallel equivalence, ordered progress, cancellation, duplicate/canonical
+  sequencing, invalid-packet metrics, and the existing real FFmpeg Phase 1–4 coverage.
 
 ### F6. Performance validation and tuning
 

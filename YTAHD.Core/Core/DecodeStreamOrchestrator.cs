@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
@@ -16,6 +19,7 @@ namespace YTAHD.Core.Core
         private readonly int _macroblockSize;
         private readonly bool _useDurabilityMatrix;
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
+        private readonly int _maxDegreeOfParallelism;
 
         public DecodeStreamOrchestrator(int width, int height, int macroblockSize)
             : this(new BinaryGridModulator(macroblockSize, macroblockSize), width, height, macroblockSize, false, null)
@@ -27,7 +31,7 @@ namespace YTAHD.Core.Core
         {
         }
 
-        public DecodeStreamOrchestrator(IModulator modulator, int width, int height, int macroblockSize, bool useDurabilityMatrix, DurabilityMatrixOptions? durabilityMatrixOptions)
+        public DecodeStreamOrchestrator(IModulator modulator, int width, int height, int macroblockSize, bool useDurabilityMatrix, DurabilityMatrixOptions? durabilityMatrixOptions, int maxDegreeOfParallelism = 0)
         {
             _modulator = modulator ?? throw new ArgumentNullException(nameof(modulator));
             _width = width;
@@ -35,11 +39,13 @@ namespace YTAHD.Core.Core
             _macroblockSize = macroblockSize;
             _useDurabilityMatrix = useDurabilityMatrix;
             _durabilityMatrixOptions = durabilityMatrixOptions ?? new DurabilityMatrixOptions();
+            if (maxDegreeOfParallelism < 0) throw new ArgumentOutOfRangeException(nameof(maxDegreeOfParallelism));
+            _maxDegreeOfParallelism = maxDegreeOfParallelism;
         }
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
-        public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null, int totalVideoFrames = 0, IProgress<DecodeProgress>? progress = null)
+        public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null, int totalVideoFrames = 0, IProgress<DecodeProgress>? progress = null, CancellationToken cancellationToken = default)
         {
             var totalStopwatch = Stopwatch.StartNew();
             double frameReadMilliseconds = 0d;
@@ -66,6 +72,11 @@ namespace YTAHD.Core.Core
             var packetGeometry = geometry with { BitsPerFrame = bitsPerFrame };
             int packetByteLength = _modulator.GetPacketBufferLength(packetGeometry, payloadBytesPerFrame);
 
+            if (_maxDegreeOfParallelism > 0)
+            {
+                return await ProcessParallelAsync(rgbStream, expectedOutputBytes, audioDatagramCount, totalVideoFrames, progress, borderWidth, payloadBytesPerFrame, rowBytes, frameBytes, bitsPerFrame, packetByteLength, totalStopwatch, cancellationToken);
+            }
+
             if (_useDurabilityMatrix)
             {
                 var packets = new List<byte[]>();
@@ -76,7 +87,7 @@ namespace YTAHD.Core.Core
                     int read = 0;
                     while (read < frameBytes)
                     {
-                        int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read);
+                        int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read, cancellationToken);
                         if (r == 0) break;
                         read += r;
                     }
@@ -192,7 +203,7 @@ namespace YTAHD.Core.Core
                 int read = 0;
                 while (read < frameBytes)
                 {
-                    int r = await rgbStream.ReadAsync(frameBufLegacy, read, frameBytes - read);
+                    int r = await rgbStream.ReadAsync(frameBufLegacy, read, frameBytes - read, cancellationToken);
                     if (r == 0) break;
                     read += r;
                 }
@@ -283,13 +294,292 @@ namespace YTAHD.Core.Core
             return accumulator.AssembleOutput(resolvedExpectedBytes);
         }
 
-        public async Task WriteToFileAsync(Stream rgbStream, string outputFile, int expectedOutputBytes)
+        private async Task<byte[]> ProcessParallelAsync(
+            Stream rgbStream,
+            int expectedOutputBytes,
+            int? audioDatagramCount,
+            int totalVideoFrames,
+            IProgress<DecodeProgress>? progress,
+            int borderWidth,
+            int payloadBytesPerFrame,
+            int rowBytes,
+            int frameBytes,
+            int bitsPerFrame,
+            int packetByteLength,
+            Stopwatch totalStopwatch,
+            CancellationToken cancellationToken)
+        {
+            int workerCount = _maxDegreeOfParallelism;
+            int channelCapacity = Math.Max(2, workerCount * 2);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var token = linkedCts.Token;
+            var work = Channel.CreateBounded<DecodeWorkItem>(new BoundedChannelOptions(channelCapacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = true,
+                SingleReader = false
+            });
+            var results = Channel.CreateBounded<DecodedFrame>(new BoundedChannelOptions(channelCapacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = false,
+                SingleReader = true
+            });
+            using var resultSlots = new SemaphoreSlim(channelCapacity, channelCapacity);
+
+            double frameReadMilliseconds = 0d;
+            var reader = Task.Run(async () =>
+            {
+                try
+                {
+                    long sequence = 0;
+                    while (true)
+                    {
+                        var frame = new byte[frameBytes];
+                        var readStopwatch = Stopwatch.StartNew();
+                        int read = 0;
+                        while (read < frameBytes)
+                        {
+                            int count = await rgbStream.ReadAsync(frame, read, frameBytes - read, token);
+                            if (count == 0) break;
+                            read += count;
+                        }
+                        readStopwatch.Stop();
+                        InterlockedAdd(ref frameReadMilliseconds, readStopwatch.Elapsed.TotalMilliseconds);
+                        if (read < frameBytes) break;
+                        await work.Writer.WriteAsync(new DecodeWorkItem(sequence++, frame), token);
+                    }
+                    work.Writer.TryComplete();
+                }
+                catch (Exception ex)
+                {
+                    work.Writer.TryComplete(ex);
+                    linkedCts.Cancel();
+                    throw;
+                }
+            }, token);
+
+            async Task WorkerAsync()
+            {
+                try
+                {
+                    await foreach (var item in work.Reader.ReadAllAsync(token))
+                    {
+                        var decodeStopwatch = Stopwatch.StartNew();
+                        var decoder = FrameBitDecoderFactory.CreateForModulator(_modulator);
+                        bool canonical = decoder.IsCanonicalFrameMemory(item.Frame, _width, _height, borderWidth);
+                        byte[]? packet = null;
+                        bool packetIsValid = false;
+                        if (!canonical)
+                        {
+                            packetIsValid = DecoderEngine.TryReadDecodedPacket(item.Frame, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out packet);
+                        }
+                        byte[]? signature = null;
+                        if (packetIsValid)
+                        {
+                            signature = new byte[packetByteLength];
+                            decoder.DecodeMemory(item.Frame, _width, _height, _macroblockSize, rowBytes, frameBytes, signature, borderWidth);
+                        }
+                        decodeStopwatch.Stop();
+                        await resultSlots.WaitAsync(token);
+                        try
+                        {
+                            await results.Writer.WriteAsync(new DecodedFrame(item.Sequence, item.Frame, canonical, packetIsValid, packet, signature, packetIsValid ? DecoderEngine.GetPacketQualityScore(packet!) : 0, decodeStopwatch.Elapsed.TotalMilliseconds), token);
+                        }
+                        catch
+                        {
+                            resultSlots.Release();
+                            throw;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    linkedCts.Cancel();
+                    throw new InvalidOperationException("Parallel frame decode failed.", ex);
+                }
+            }
+
+            var workers = Enumerable.Range(0, workerCount).Select(_ => WorkerAsync()).ToArray();
+            var workersCompletion = Task.WhenAll(workers);
+            _ = workersCompletion.ContinueWith(
+                completed => results.Writer.TryComplete(completed.IsFaulted ? completed.Exception : null),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            var aggregator = Task.Run(async () =>
+            {
+                var pending = new SortedDictionary<long, DecodedFrame>();
+                var packets = new List<byte[]>();
+                var accumulator = new DecodedFrameAccumulator();
+                var duplicateTracker = new DuplicateFrameRunTracker();
+                var metrics = new DecodeMetrics();
+                const int repeatedFrameCount = 3;
+                double packetDecodeMilliseconds = 0d;
+                double aggregationMilliseconds = 0d;
+                long nextSequence = 0;
+                bool stopRequested = false;
+
+                bool DecodePayloadFrame(byte[] frame)
+                {
+                    return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
+                }
+
+                void FlushPendingRun()
+                {
+                    if (!duplicateTracker.HasCurrentRun) return;
+                    metrics.DuplicateRunCount++;
+                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
+                    duplicateTracker.FlushCurrentRun(repeatedFrameCount, DecodePayloadFrame);
+                }
+
+                void Aggregate(DecodedFrame result)
+                {
+                    var aggregationStopwatch = Stopwatch.StartNew();
+                    packetDecodeMilliseconds += result.DecodeMilliseconds;
+                    metrics.TotalFramesSeen++;
+                    progress?.Report(new DecodeProgress(metrics.TotalFramesSeen, totalVideoFrames));
+                    if (result.Canonical)
+                    {
+                        metrics.CanonicalFrameCount++;
+                        FlushPendingRun();
+                    }
+                    else if (!result.PacketIsValid)
+                    {
+                        metrics.InvalidPacketCount++;
+                    }
+                    else if (_useDurabilityMatrix)
+                    {
+                        packets.Add(result.Packet!);
+                    }
+                    else
+                    {
+                        var completed = duplicateTracker.Update(result.Frame, result.Signature!, result.Quality);
+                        if (completed is not null)
+                        {
+                            metrics.DuplicateRunCount++;
+                            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completed.BestQuality);
+                            duplicateTracker.Flush(completed, repeatedFrameCount, DecodePayloadFrame);
+                        }
+                    }
+                    stopRequested |= !_useDurabilityMatrix && DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes);
+                    aggregationStopwatch.Stop();
+                    aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
+                }
+
+                try
+                {
+                    await foreach (var result in results.Reader.ReadAllAsync(token))
+                    {
+                        pending.Add(result.Sequence, result);
+                        while (pending.Remove(nextSequence, out var ordered))
+                        {
+                            if (!stopRequested) Aggregate(ordered);
+                            resultSlots.Release();
+                            nextSequence++;
+                        }
+                    }
+                    while (pending.Remove(nextSequence, out var finalResult))
+                    {
+                        if (!stopRequested) Aggregate(finalResult);
+                        resultSlots.Release();
+                        nextSequence++;
+                    }
+
+                    if (_useDurabilityMatrix)
+                    {
+                        var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
+                        var uniqueDataLengths = new Dictionary<(int GroupId, int SymbolId), int>();
+                        foreach (var packet in packets)
+                        {
+                            if (!FramePacketCodec.TryDecodeWithTolerance(packet, out var frameType, out var frameIndex, out _, out var groupStart, out _, out var payloadLength, out _) || frameType != FramePacket.FrameTypeData)
+                                continue;
+                            uniqueDataLengths.TryAdd((groupStart / Math.Max(1, _durabilityMatrixOptions?.GroupSize ?? 1), Math.Max(0, frameIndex - groupStart)), payloadLength);
+                        }
+                        int recoveredLength = uniqueDataLengths.Values.Sum();
+                        if (recoveredLength <= 0)
+                            throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
+                        if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes))
+                            throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
+                        metrics.TotalDecodedPayloadBytes = decodedBytes;
+                        metrics.TotalFramesDecoded = packets.Count;
+                        metrics.TotalFramesSeen = packets.Count;
+                        metrics.RecoveredGroupCount = packets.Count;
+                        metrics.RecoveredDataFrameCount = packets.Count;
+                        metrics.AudioDatagramCount = audioDatagramCount;
+                        metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
+                        metrics.FrameReadMilliseconds = frameReadMilliseconds;
+                        metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
+                        metrics.AggregationMilliseconds = aggregationMilliseconds;
+                        LastDecodeMetrics = metrics;
+                        return payload;
+                    }
+
+                    duplicateTracker.FlushCurrentRun(repeatedFrameCount, DecodePayloadFrame);
+                    if (accumulator.OrderedPayload.Count == 0)
+                        throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
+                    int resolvedExpectedBytes = DecodeRecoveryPolicy.ResolveExpectedOutputBytes(accumulator, expectedOutputBytes);
+                    accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, resolvedExpectedBytes);
+                    metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
+                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
+                    metrics.TotalDecodedPayloadBytes = resolvedExpectedBytes;
+                    metrics.TotalFramesDecoded = accumulator.TotalDataFrames;
+                    metrics.RecoveredDataFrameCount = accumulator.OrderedPayload.Count;
+                    metrics.RecoveredParityFrameCount = accumulator.ParityPayloadByGroup.Count;
+                    metrics.AudioDatagramCount = audioDatagramCount;
+                    metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
+                    metrics.FrameReadMilliseconds = frameReadMilliseconds;
+                    metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
+                    metrics.AggregationMilliseconds = aggregationMilliseconds;
+                    LastDecodeMetrics = metrics;
+                    return accumulator.AssembleOutput(resolvedExpectedBytes);
+                }
+                catch
+                {
+                    linkedCts.Cancel();
+                    throw;
+                }
+            }, token);
+
+            try
+            {
+                var output = await aggregator;
+                await reader;
+                await workersCompletion;
+                return output;
+            }
+            finally
+            {
+                linkedCts.Cancel();
+                work.Writer.TryComplete();
+                results.Writer.TryComplete();
+                try { await reader; } catch { }
+                try { await workersCompletion; } catch { }
+            }
+        }
+
+        private static void InterlockedAdd(ref double location, double value)
+        {
+            double current;
+            do
+            {
+                current = location;
+            }
+            while (Interlocked.CompareExchange(ref location, current + value, current) != current);
+        }
+
+        private sealed record DecodeWorkItem(long Sequence, byte[] Frame);
+
+        private sealed record DecodedFrame(long Sequence, byte[] Frame, bool Canonical, bool PacketIsValid, byte[]? Packet, byte[]? Signature, int Quality, double DecodeMilliseconds);
+
+        public async Task WriteToFileAsync(Stream rgbStream, string outputFile, int expectedOutputBytes, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(outputFile))
                 throw new ArgumentException("Output path is required.", nameof(outputFile));
 
-            var output = await ProcessAsync(rgbStream, expectedOutputBytes);
-            await File.WriteAllBytesAsync(outputFile, output);
+            var output = await ProcessAsync(rgbStream, expectedOutputBytes, cancellationToken: cancellationToken);
+            await File.WriteAllBytesAsync(outputFile, output, cancellationToken);
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using YTAHD.Core.Core;
 using YTAHD.Core.Modulation;
@@ -19,7 +20,7 @@ public sealed class YtahdCodecService
         _ffmpegFactory = ffmpegFactory ?? throw new ArgumentNullException(nameof(ffmpegFactory));
     }
 
-    public async Task EncodeAsync(EncodeOptions options)
+    public async Task EncodeAsync(EncodeOptions options, CancellationToken cancellationToken = default)
     {
         if (options == null) throw new ArgumentNullException(nameof(options));
         if (string.IsNullOrWhiteSpace(options.InputFile)) throw new ArgumentException("InputFile is required.", nameof(options));
@@ -33,11 +34,11 @@ public sealed class YtahdCodecService
             await engine.VerifyAsync();
         }
 
-        await engine.EncodeAsync(options.InputFile, options.OutputVideo);
+        await engine.EncodeAsync(options.InputFile, options.OutputVideo, cancellationToken);
         LastEncodeMetrics = engine.LastEncodeMetrics;
     }
 
-    public async Task DecodeAsync(DecodeOptions options)
+    public async Task DecodeAsync(DecodeOptions options, CancellationToken cancellationToken = default)
     {
         if (options == null) throw new ArgumentNullException(nameof(options));
         if (string.IsNullOrWhiteSpace(options.InputVideo)) throw new ArgumentException("InputVideo is required.", nameof(options));
@@ -51,11 +52,11 @@ public sealed class YtahdCodecService
             await engine.VerifyAsync();
         }
 
-        await engine.DecodeAsync(options.InputVideo, options.OutputFile);
+        await engine.DecodeAsync(options.InputVideo, options.OutputFile, cancellationToken);
         LastDecodeMetrics = engine.LastDecodeMetrics;
     }
 
-    public async Task DecodeFromRgbStreamAsync(DecodeRgbOptions options)
+    public async Task DecodeFromRgbStreamAsync(DecodeRgbOptions options, CancellationToken cancellationToken = default)
     {
         if (options == null) throw new ArgumentNullException(nameof(options));
 
@@ -67,7 +68,8 @@ public sealed class YtahdCodecService
             options.Height,
             options.MacroblockSize,
             options.ExpectedOutputBytes,
-            options.OutputFile);
+            options.OutputFile,
+            cancellationToken: cancellationToken);
         LastDecodeMetrics = engine.LastDecodeMetrics;
     }
 }

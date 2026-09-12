@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using YTAHD.Core.Core;
@@ -87,6 +89,51 @@ namespace YTAHD.Tests
         }
 
         [Fact]
+        public async Task DecodeStreamOrchestrator_Parallel_Matches_Serial_Output_And_Ordered_Progress()
+        {
+            var tmpIn = Path.GetTempFileName();
+            try
+            {
+                byte[] data = new byte[1600];
+                new Random(31).NextBytes(data);
+                await File.WriteAllBytesAsync(tmpIn, data);
+
+                var mod = new BinaryGridModulator();
+                var fake = new FakeFFmpegWrapper(Width, Height, 30);
+                var encoder = new EncoderEngine(mod, fake, Macroblock, Width, Height, 30);
+                await encoder.EncodeAsync(tmpIn, "out.mp4");
+                var raw = fake.Process!.Buffer.ToArray();
+                int totalFrames = raw.Length / (Width * Height * 3);
+
+                var serial = new DecodeStreamOrchestrator(mod, Width, Height, Macroblock);
+                var serialOutput = await serial.ProcessAsync(new MemoryStream(raw, writable: false), 0);
+                var reports = new List<DecodeProgress>();
+                var parallel = new DecodeStreamOrchestrator(mod, Width, Height, Macroblock, false, null, 3);
+                var parallelOutput = await parallel.ProcessAsync(new MemoryStream(raw, writable: false), 0, totalVideoFrames: totalFrames, progress: new CaptureProgress(reports));
+
+                Assert.Equal(serialOutput, parallelOutput);
+                Assert.Equal(serial.LastDecodeMetrics.InvalidPacketCount, parallel.LastDecodeMetrics.InvalidPacketCount);
+                Assert.Equal(totalFrames, reports[^1].FramesSeen);
+                Assert.True(reports.Zip(reports.Skip(1), (left, right) => right.FramesSeen >= left.FramesSeen).All(value => value));
+            }
+            finally
+            {
+                File.Delete(tmpIn);
+            }
+        }
+
+        [Fact]
+        public async Task DecodeStreamOrchestrator_Parallel_Propagates_Cancellation()
+        {
+            using var cancellation = new CancellationTokenSource();
+            var orchestrator = new DecodeStreamOrchestrator(new BinaryGridModulator(), Width, Height, Macroblock, false, null, 2);
+            var processing = orchestrator.ProcessAsync(new BlockingReadStream(), 0, cancellationToken: cancellation.Token);
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => processing);
+        }
+
+        [Fact]
         public async Task EncoderDecoder_RoundTrip_FakeFFmpeg()
         {
             var tmpIn = Path.GetTempFileName();
@@ -132,6 +179,25 @@ namespace YTAHD.Tests
             public void Report(DecodeProgress value)
             {
                 _reports.Add(value);
+            }
+        }
+
+        private sealed class BlockingReadStream : Stream
+        {
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => 0;
+            public override long Position { get => 0; set => throw new NotSupportedException(); }
+            public override void Flush() => throw new NotSupportedException();
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return 0;
             }
         }
     }

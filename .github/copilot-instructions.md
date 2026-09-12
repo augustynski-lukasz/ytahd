@@ -9,6 +9,12 @@
 - Tests: `YTAHD.Tests`
 - Perf tool: `YTAHD.Perf`
 
+## Agent routing
+
+- Use the `backend-dev` custom agent for backend C# implementation work in `YTAHD.Core`, `YTAHD.Cli`, `YTAHD.Tests`, `YTAHD.Perf`, and `probe` when the task involves feature development, bug fixes, protocol or modulator changes, FFmpeg integration, performance work, or related tests.
+- The `backend-dev` agent must follow this repository's real FFmpeg validation, lossy-codec durability, architecture, and ADR requirements.
+- Keep lightweight project questions, documentation-only edits, and coordination in the main agent unless delegating to `backend-dev` would improve context isolation or execution.
+
 ## Architecture and conventions
 
 - Prefer working through the app/service layer (`YTAHD.Core.Application`) instead of reaching directly into implementation details when possible.

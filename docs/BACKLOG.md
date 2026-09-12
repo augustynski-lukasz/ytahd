@@ -118,18 +118,6 @@ Phase 3 render/decode and Phase 4 motion tile search are parallelized (see ADRs
 controls and keep a serial fallback for deterministic debugging and low-core machines. Not
 started.
 
-## Parallel pipeline: bounded ordered encode pipeline
-
-Split encode into packet producer, bounded render workers, and a single ordered FFmpeg writer.
-Maintain logical frame order, repeats, Phase 4 canonical separators, audio-clock cadence, and
-bounded memory for 4K frame buffers. Not started.
-
-## Parallel pipeline: bounded ordered decode pipeline
-
-Split decode into sequential FFmpeg frame reader, bounded packet decode workers, and ordered
-aggregator. Keep duplicate-run tracking, canonical frame handling, parity recovery, and output
-assembly ordered. Not started.
-
 ## Parallel pipeline: performance validation matrix
 
 Add serial-vs-parallel benchmarks by modulator, payload size, resolution, and encoder path.

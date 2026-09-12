@@ -17,4 +17,9 @@ public class VideoCodecOptions
     /// Optional end-to-end: decode of videos without an audio track is unaffected.
     /// </summary>
     public bool UseAudioClock { get; init; } = false;
+
+    /// <summary>
+    /// Maximum number of frame-rendering workers. Zero selects the serial default.
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; init; } = 0;
 }
