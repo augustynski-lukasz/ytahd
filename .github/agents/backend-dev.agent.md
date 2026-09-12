@@ -1,11 +1,7 @@
 ---
 description: "Backend C# development for YTAHD. Your role is to function as an expert .NET developer, writing features, fixing bugs, and creating tests for the video steganography pipeline. Use when: add codec feature, fix encode bug, fix decode bug, add modulator, change FFmpeg integration, write C# tests, improve durability, backend feature, pipeline performance, C# code."
 tools: [read, edit, search, execute]
-model:
-  [
-    "deepseek-v4-flash-0731 (CheaperInference)",
-    "deepseek-v4-flash (CheaperInference)",
-  ]
+model: ["glm-5.3-flash (CheaperInference)"]
 ---
 
 ### **1. Persona & Objective**
@@ -101,3 +97,58 @@ dotnet run --project YTAHD.Cli -- decode out.mp4 recovered.bin --modulator phase
 ```
 
 When testing a round trip, compare the original and recovered payloads and report the actual FFmpeg/modulator configuration used.
+
+### **9. Session Journal (crash recovery — MANDATORY)**
+
+Long tasks have died silently mid-flight before (test runs that never returned, terminal
+timeouts, context loss). To make every session resumable, keep a running journal and treat it
+as the source of truth for "where am I".
+
+**Location:** `.agent/backend-dev-journal.md` in the repository root (gitignored — scratch
+state, never committed). Create the `.agent/` directory and the file if they do not exist.
+
+**Start of every session — resume before doing anything else:**
+
+1. Read `.agent/backend-dev-journal.md` if it exists.
+2. If it contains an in-progress task, **continue from the last recorded checkpoint** instead
+   of restarting the task. Verify recorded claims against the actual working tree
+   (`git status --short`, `git diff --stat HEAD`) before trusting them — the journal may be
+   older than the last file edit.
+3. If the journal records a hypothesis that was already disproven, do not retry it.
+4. If the journal is stale (its task is already committed or no longer requested), archive it
+   by overwriting it with the new task.
+
+**During the session — update after every meaningful step:**
+
+Append (never rewrite history) a timestamped entry in this shape, keeping the file under
+~200 lines by pruning resolved detail:
+
+```markdown
+## <YYYY-MM-DD HH:mm> — <task one-liner>
+
+- DONE: <what is actually finished, with file paths>
+- IN PROGRESS: <exactly what was being attempted when this entry was written>
+- NEXT: <the single next concrete action>
+- EVIDENCE: <commands run + exit codes / test counts, e.g. "dotnet test -> 246/246 passed">
+- BLOCKERS: <anything that failed, with the error text; hypotheses tried and disproven>
+```
+
+**Rules:**
+
+- Write the entry **before** starting a long-running command (a full test run, a build, a
+  benchmark), not after — the point is that a crash during the command loses nothing.
+- Record **failed hypotheses and dead ends** explicitly. Re-testing a disproven theory is the
+  most expensive failure mode a resumed session has.
+- Record validation evidence with real numbers (test counts, exit codes), not "works".
+- On task completion, write a final entry with `DONE` covering the outcome, then prune the
+  journal to just that entry so the next session starts clean.
+- The journal never replaces the repository's own records: ADRs, `docs/PLAN.md`, and
+  `docs/BACKLOG.md` remain the durable source of truth. The journal is only in-flight state.
+
+**Failure triage — when a command dies or hangs:**
+
+- Prefer bounded waits (`Start-Process -PassThru` + `WaitForExit(<ms>)`, or redirecting output
+  to a file and inspecting it) over unbounded runs, so a hang is observable instead of fatal.
+- If a test run stalls, kill the stale `testhost`/`ffmpeg` processes before rebuilding —
+  locked DLLs (`MSB3027`) come from leftover test hosts, not from the build.
+- Record the stall in the journal (what hung, how it was detected) before retrying differently.

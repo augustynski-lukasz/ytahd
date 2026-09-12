@@ -55,6 +55,9 @@ coverage.*
 .coverage
 .coveragexml
 
+# Agent session journals (scratch state, never committed)
+.agent/
+
 # Secrets
 secrets.json
 probe-input.bin
