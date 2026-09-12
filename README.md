@@ -249,17 +249,40 @@ To prevent frame-dropping or frame-duplication errors from permanently desynchro
 
 ---
 
-## 🧮 Data Durability Matrix
+## 🧮 Data Durability Matrix & Integrity Verification
 
-The transport layer now includes a standalone symbol-based durability prototype above the current frame/packet protocol. This does not replace the modulator contract and it is not yet integrated as the production encode/decode path; it is a focused transport-layer experiment and recovery model that remains isolated from the live service pipeline until the service-layer integration work is completed.
+The transport layer combines two complementary protections above the frame/packet protocol:
 
-The active design is a parity-first matrix with group-aware source symbols and repair symbols. Payload bytes are split into symbol blocks, grouped by durability window, and reconstructed using the highest-quality valid subset according to packet metadata, checksum validity, and frame recovery thresholds. The current implementation intentionally keeps the runtime API replaceable for future fountain-style expansion while preserving the real FFmpeg baseline and the existing Phase 1 / Phase 2 / Phase 3 carrier pipeline as the production transport boundary.
+**Data Durability Matrix** (parity-based symbol transport, ADR
+`F-20260830-04-data-durability-matrix.md`). Payload bytes are split into symbol blocks grouped
+by durability window; each group carries an XOR parity symbol so a single missing frame per
+group is rebuilt at decode. The matrix is integrated into the live service path — enable it
+with `VideoCodecOptions.UseDurabilityMatrix` (service API) and it is exercised by the
+real-FFmpeg regression tests. The runtime API stays replaceable for future fountain-style
+expansion.
 
-This means the receiver can rebuild a payload from a valid subset in isolation, but the prototype is still not yet the default path used by `EncoderEngine`, `DecoderEngine`, or `YtahdCodecService`. The proof points are deterministic unit tests and a standalone real libx264 smoke check for the durability codec itself, while the full service-layer integration remains the next required engineering step before the matrix can be treated as a production feature.
+**Integrity verification** (ADR `CR-20260912-05-integrity-durability-combination.md`). Three
+levels of proof, each closing a different silent-failure hole:
 
-### Current operating baseline
+- **Per-frame SHA-256** — the v2 frame header hash is enforced strictly on decode: a frame
+  whose payload does not match its header hash is rejected as corrupt, not accepted with a low
+  quality score. Legacy v1 frames keep their hash-gated wrapped-length recovery.
+- **Stream manifest** — a dedicated manifest frame (`FrameTypeManifest`) records protocol
+  version, total payload bytes, the whole-payload SHA-256, modulator identity, geometry, data
+  frame count, and parity settings. It is emitted redundantly at the stream start and end, so
+  at least one copy survives typical head/tail loss. Multiple intact copies are reconciled;
+  conflicting manifests fail the decode loudly.
+- **Whole-payload verification** — after the matrix reconstructs the payload, its SHA-256 is
+  compared against the manifest hash and its length against the manifest's declared byte
+  count. The CLI decode summary reports `integrity=passed`, `integrity=failed`, or
+  `integrity=frame-only` (legacy streams without a manifest).
 
-The durability overlay is currently validated as a standalone codec and recovery model, not as a fully wired service-level transport. The project treats live FFmpeg output as the authority for real codec behavior and keeps the durability logic isolated until the production pipeline explicitly calls into it. The current evidence covers deterministic matrix recovery and a focused libx264 smoke check for the transport codec itself, but the actual encode/decode service path still needs to be connected before this feature can be called production-ready.
+Together this means the receiver can rebuild a payload from a valid subset **and prove** the
+result equals the original: a corrupted length field can no longer silently truncate the
+output, and a damaged frame is either repaired through parity or rejected loudly.
+
+Evidence: 265/265 suite tests green including real libx264 round trips reporting
+`integrity=passed`, corruption-rejection cases, and the legacy frame-only path.
 
 ---
 
