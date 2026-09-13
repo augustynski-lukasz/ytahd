@@ -6,7 +6,6 @@ using System.Security.Cryptography;
 using System.Threading.Channels;
 using System.Threading;
 using System.Threading.Tasks;
-using SkiaSharp;
 using YTAHD.Core.Application;
 using YTAHD.Core.Audio;
 using YTAHD.Core.Modulation;

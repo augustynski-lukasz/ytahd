@@ -7,12 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="SkiaSharp" Version="2.88.9" />
-    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.9" />
-    <PackageReference Include="MathNet.Numerics" Version="4.15.0" />
-  </ItemGroup>
-
-  <ItemGroup>
     <!-- Lets the test suite exercise internal infrastructure (child-process pipe handling) directly
          without widening the public API. -->
     <InternalsVisibleTo Include="YTAHD.Tests" />
