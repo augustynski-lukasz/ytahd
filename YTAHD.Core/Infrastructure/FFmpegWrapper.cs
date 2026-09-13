@@ -59,7 +59,10 @@ namespace YTAHD.Core.Infrastructure
             }
         }
 
-        public async Task<IFFmpegProcess> StartAsync(string outputPath, string? audioPcmFilePath = null)
+        // Synchronous setup (no awaiting): the stderr drain is fire-and-forget and the process
+        // wrapper is returned immediately, so this is declared as Task-returning without async
+        // to avoid the CS1998 synchronous-async warning.
+        public Task<IFFmpegProcess> StartAsync(string outputPath, string? audioPcmFilePath = null)
         {
             if (string.IsNullOrWhiteSpace(outputPath))
                 throw new ArgumentException("Output path is required.", nameof(outputPath));
@@ -113,7 +116,7 @@ namespace YTAHD.Core.Infrastructure
             // lifetime of the encode and starve the pool the pipeline itself runs on.
             _ = ChildProcessPipes.DrainAsync(_process.StandardError);
 
-            return new ProcessWrapper(_process);
+            return Task.FromResult<IFFmpegProcess>(new ProcessWrapper(_process));
         }
 
         public async Task<byte[]?> TryExtractAudioPcmAsync(string inputVideo)
