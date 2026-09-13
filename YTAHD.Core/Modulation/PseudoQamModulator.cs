@@ -40,8 +40,10 @@ namespace YTAHD.Core.Modulation
 
         public int GetPacketBufferLength(ModulatorGeometry geometry, int payloadBytesPerFrame)
         {
-            _ = payloadBytesPerFrame;
-            return Math.Max(geometry.BitsPerFrame, geometry.HeaderBytes);
+            // CR-20260913-06: bytes contract, matching the sibling modulators. The historical
+            // Math.Max(BitsPerFrame, HeaderBytes) returned a bit count when BitsPerFrame
+            // dominated, over-allocating ~8x; decode never relied on the oversized tail.
+            return geometry.HeaderBytes + payloadBytesPerFrame;
         }
 
         public int GetPacketBufferLength(int width, int height, int headerBytes, int payloadBytesPerFrame, int bitsPerFrame, int macroblockSize = 0)
@@ -49,7 +51,7 @@ namespace YTAHD.Core.Modulation
             _ = width;
             _ = height;
             _ = macroblockSize;
-            return Math.Max(bitsPerFrame, headerBytes);
+            return headerBytes + payloadBytesPerFrame;
         }
 
         public int GetBorderWidth(ModulatorGeometry geometry)

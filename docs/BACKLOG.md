@@ -16,9 +16,6 @@ Phase 4 follow-up research below is the natural next protocol work).
 - **G3 — Remove unused dependencies (R3; fixes F4).** Drop `SkiaSharp` + `MathNet.Numerics`
   from `YTAHD.Core.csproj` and the dead `using SkiaSharp;`. ADR
   `TD-20260913-01-remove-unused-dependencies.md`.
-- **G5 — Packet buffer-length contract (R5; fixes F9).** `PseudoQamModulator.
-GetPacketBufferLength` returns bytes like its siblings; add cross-modulator parity test.
-  ADR `CR-20260913-06-packet-buffer-length-contract.md`.
 - **G7 — Cleanup batch (R6b; fixes F8, F10, F12, F13).** Single ffprobe resolution, cached
   per-profile tile tables, hoisted `NormalizeModulator`, delete `test-output.txt`. ADR
   `TD-20260913-02-review-cleanup-batch.md`.
