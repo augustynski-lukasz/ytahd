@@ -2,6 +2,16 @@
 
 Open items only. When an item is resolved, delete it from here and add an ADR in `docs/decisions/`.
 
+## Streaming decode output (memory-bounded payload assembly)
+
+From the 2026-09-14 real-user CLI validation (10 MB @ 4K): the decode assembles the entire
+payload in memory and writes the output file only at the end. Fine at 10 MB, fatal at the
+1 TB bound — the decode would OOM after hours of CPU with zero output to show. Design is
+decided in ADR `F-20260914-02-streaming-decode-output.md` (Status: Accepted): contiguous-
+prefix flush to a consumer sink, incremental per-group parity recovery, streaming SHA-256.
+Main implementation risk: `DecodedFrameAccumulator` currently recovers losses retroactively
+and needs a per-group incremental redesign. Not started.
+
 ## Manifest copy identity in the wire format (deferred protocol change)
 
 From Review 1 finding F6: manifest chunk reassembly in
