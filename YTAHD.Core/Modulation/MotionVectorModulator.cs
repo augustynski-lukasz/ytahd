@@ -12,10 +12,24 @@ namespace YTAHD.Core.Modulation
     /// </summary>
     public sealed class MotionVectorModulator : IModulator, IFrameEmissionStrategy
     {
-        private const int CellSize = MotionTileBasis.CellSize;
-        private const int TextureSize = MotionTileBasis.TextureSize;
-        private const int Guard = MotionTileBasis.MaxAbsOffsetPx;
+        private readonly MotionTileProfile _profile;
+        private readonly int CellSize;
+        private readonly int TextureSize;
+        private readonly int Guard;
+        private readonly byte[,] Texture;
         private const int BytesPerBlock = 1;
+
+        public MotionVectorModulator(MotionTileProfile? profile = null)
+        {
+            _profile = profile ?? MotionTileProfile.Default;
+            CellSize = _profile.CellSize;
+            TextureSize = _profile.TextureSize;
+            Guard = _profile.MaxAbsOffsetPx;
+            Texture = MotionTileBasis.GetTexture(_profile);
+        }
+
+        /// <summary>Tile geometry profile for this instance (F-20260913-01).</summary>
+        public MotionTileProfile Profile => _profile;
 
         public int MacroblockWidth => CellSize;
         public int MacroblockHeight => CellSize;
@@ -59,7 +73,7 @@ namespace YTAHD.Core.Modulation
             if (pixelBuffer.Length < CellSize * CellSize)
                 throw new ArgumentException($"Pixel buffer too small for one {CellSize}×{CellSize} cell.", nameof(pixelBuffer));
 
-            (int dx, int dy) = input.IsEmpty ? (0, 0) : MotionTileBasis.EncodeOffset(input[0]);
+            (int dx, int dy) = input.IsEmpty ? (0, 0) : MotionTileBasis.EncodeOffset(_profile, input[0]);
             RenderCellGrayscale(pixelBuffer, dx, dy);
         }
 
@@ -77,7 +91,7 @@ namespace YTAHD.Core.Modulation
             if (pixelBuffer.Length < CellSize * CellSize) return;
 
             var (dx, dy, _) = FindBestOffset(pixelBuffer);
-            if (MotionTileBasis.TryDecodeOffset(dx, dy, out byte value))
+            if (MotionTileBasis.TryDecodeOffset(_profile, dx, dy, out byte value))
             {
                 output[0] = value;
             }
@@ -92,7 +106,7 @@ namespace YTAHD.Core.Modulation
         /// shifted by the offset encoding one payload byte. Cells beyond the payload length
         /// (last frame of a stream) are left as plain neutral background, undrawn.
         /// </summary>
-        public static byte[] CreatePhase4Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
+        public byte[] CreatePhase4Frame(int width, int height, int borderWidth, ReadOnlySpan<byte> payload)
         {
             if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
             if (borderWidth < 0 || borderWidth > Math.Min(width, height) / 2) throw new ArgumentOutOfRangeException(nameof(borderWidth));
@@ -104,7 +118,7 @@ namespace YTAHD.Core.Modulation
             }
 
             bool canonical = payload.IsEmpty;
-            var texture = MotionTileBasis.Texture;
+            var texture = Texture;
             int blockIndex = 0;
 
             for (int blockY = 0; blockY + CellSize <= height - borderWidth * 2; blockY += CellSize)
@@ -117,7 +131,7 @@ namespace YTAHD.Core.Modulation
                         continue;
                     }
 
-                    (int dx, int dy) = canonical ? (0, 0) : MotionTileBasis.EncodeOffset(payload[blockIndex]);
+                    (int dx, int dy) = canonical ? (0, 0) : MotionTileBasis.EncodeOffset(_profile, payload[blockIndex]);
                     int cellOriginX = borderWidth + blockX;
                     int cellOriginY = borderWidth + blockY;
                     int tileX = cellOriginX + Guard + dx;
@@ -142,12 +156,12 @@ namespace YTAHD.Core.Modulation
 
         // ── private helpers ──────────────────────────────────────────────────────────
 
-        private static void RenderCellGrayscale(Span<byte> cellBuffer, int dx, int dy)
+        private void RenderCellGrayscale(Span<byte> cellBuffer, int dx, int dy)
         {
             for (int i = 0; i < CellSize * CellSize; i++)
                 cellBuffer[i] = 128;
 
-            var texture = MotionTileBasis.Texture;
+            var texture = Texture;
             int tileX = Guard + dx;
             int tileY = Guard + dy;
             for (int py = 0; py < TextureSize; py++)
@@ -159,10 +173,10 @@ namespace YTAHD.Core.Modulation
             }
         }
 
-        private static (int Dx, int Dy, long Sad) FindBestOffset(ReadOnlySpan<byte> cellBuffer)
+        private (int Dx, int Dy, long Sad) FindBestOffset(ReadOnlySpan<byte> cellBuffer)
         {
-            var texture = MotionTileBasis.Texture;
-            var axisOffsets = MotionTileBasis.GetAxisOffsets();
+            var texture = Texture;
+            var axisOffsets = MotionTileBasis.GetAxisOffsets(_profile);
 
             long bestSad = long.MaxValue;
             int bestDx = 0, bestDy = 0;

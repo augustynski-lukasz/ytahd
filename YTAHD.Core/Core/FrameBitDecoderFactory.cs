@@ -58,9 +58,9 @@ namespace YTAHD.Core.Core
             {
                 decoder = new DctFrameBitDecoder();
             }
-            else if (modulator is MotionVectorModulator)
+            else if (modulator is MotionVectorModulator motion)
             {
-                decoder = new MotionFrameBitDecoder();
+                decoder = new MotionFrameBitDecoder(motion.Profile);
             }
             else
             {

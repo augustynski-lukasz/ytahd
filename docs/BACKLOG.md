@@ -2,14 +2,6 @@
 
 Open items only. When an item is resolved, delete it from here and add an ADR in `docs/decisions/`.
 
-## Phase 4 tile-size sweep (tuning follow-up)
-
-`MotionVectorModulator`/`MotionTileBasis`/`MotionFrameBitDecoder` (see ADR
-`F-20260903-01-phase4-motion-vector-design.md`, `Status: Implemented`) ship a fixed 8×8
-texture. The originally planned 4×4/16×16 tile-size sweep was deferred rather than blocking
-the A5 real-codec exit gate: parameterizing `MotionTileBasis`'s currently-hardcoded
-texture-size constants is a refactor across already-tested code, not yet done. Not started.
-
 ## Phase 4 follow-up research (motion as sync clock, not carrier)
 
 Tracked from `docs/PLAN.md` stage C2: motion-synced Phase 3 (sparse always-moving marker
