@@ -34,16 +34,16 @@ namespace YTAHD.Core.Core
         /// <summary>Total logical (data + parity) frames actually reconstructed from the video stream.</summary>
         public int TotalRecoveredLogicalFrames => RecoveredDataFrameCount + RecoveredParityFrameCount;
 
-    /// <summary>
-    /// Whole-payload integrity status (CR-20260912-05 stage 3): <c>Passed</c> when the assembled
-    /// payload matched the stream manifest's SHA-256, <c>Failed</c> when it did not,
-    /// <c>FrameOnly</c> for legacy streams without a manifest, <c>Unknown</c> when the manifest
-    /// was never consulted (e.g. the durability matrix was not used).
-    /// </summary>
-    public IntegrityStatus IntegrityStatus { get; set; } = IntegrityStatus.Unknown;
+        /// <summary>
+        /// Whole-payload integrity status (CR-20260912-05 stage 3): <c>Passed</c> when the assembled
+        /// payload matched the stream manifest's SHA-256, <c>Failed</c> when it did not,
+        /// <c>FrameOnly</c> for legacy streams without a manifest, <c>Unknown</c> when the manifest
+        /// was never consulted (e.g. the durability matrix was not used).
+        /// </summary>
+        public IntegrityStatus IntegrityStatus { get; set; } = IntegrityStatus.Unknown;
 
-    /// <summary>The stream manifest recovered from intact manifest frames, if any.</summary>
-    public StreamManifest? Manifest { get; set; }
+        /// <summary>The stream manifest recovered from intact manifest frames, if any.</summary>
+        public StreamManifest? Manifest { get; set; }
         /// True when the audio clock indicates more datagrams were sent than the video
         /// pipeline could reconstruct (beyond a small tolerance for detector/AAC noise) —
         /// e.g. a whole parity group silently dropped, which XOR-parity alone cannot detect

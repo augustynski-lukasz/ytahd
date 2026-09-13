@@ -23,7 +23,7 @@ public sealed class DurabilityTransportCodec
         }
     }
 
-    public List<byte[]> EncodeToFramePackets(byte[] payload, StreamManifest? manifest = null)
+    public List<byte[]> EncodeToFramePackets(byte[] payload, StreamManifest? manifest = null, int maxPayloadBytesPerFrame = 0)
     {
         if (payload is null)
         {
@@ -44,8 +44,10 @@ public sealed class DurabilityTransportCodec
         // its own per-frame SHA-256.
         if (manifest is not null)
         {
-            var manifestPayload = StreamManifestCodec.Serialize(manifest);
-            packets.Add(FramePacketCodec.CreateManifestFramePacket(totalDataSymbols, manifestPayload));
+            foreach (var chunk in SplitManifestIntoChunks(manifest, totalDataSymbols, maxPayloadBytesPerFrame))
+            {
+                packets.Add(chunk);
+            }
         }
 
         foreach (var group in symbols.GroupBy(s => s.GroupId).OrderBy(g => g.Key))
@@ -79,11 +81,40 @@ public sealed class DurabilityTransportCodec
 
         if (manifest is not null)
         {
-            var manifestPayload = StreamManifestCodec.Serialize(manifest);
-            packets.Add(FramePacketCodec.CreateManifestFramePacket(totalDataSymbols, manifestPayload));
+            foreach (var chunk in SplitManifestIntoChunks(manifest, totalDataSymbols, maxPayloadBytesPerFrame))
+            {
+                packets.Add(chunk);
+            }
         }
 
         return packets;
+    }
+
+    /// <summary>
+    /// Serialises the manifest and splits it into manifest frames whose payload fits one frame's
+    /// payload capacity. With no capacity limit (or a fitting body) this yields exactly one
+    /// byte-identical manifest frame, preserving the pre-chunking wire format.
+    /// </summary>
+    private static IEnumerable<byte[]> SplitManifestIntoChunks(StreamManifest manifest, int totalDataSymbols, int maxPayloadBytesPerFrame)
+    {
+        var manifestPayload = StreamManifestCodec.Serialize(manifest);
+        if (maxPayloadBytesPerFrame <= 0 || manifestPayload.Length <= maxPayloadBytesPerFrame)
+        {
+            yield return FramePacketCodec.CreateManifestFramePacket(totalDataSymbols, 0, 1, manifestPayload);
+            yield break;
+        }
+
+        int chunkCount = (manifestPayload.Length + maxPayloadBytesPerFrame - 1) / maxPayloadBytesPerFrame;
+        for (int i = 0; i < chunkCount; i++)
+        {
+            int chunkStart = i * maxPayloadBytesPerFrame;
+            int chunkLength = Math.Min(maxPayloadBytesPerFrame, manifestPayload.Length - chunkStart);
+            yield return FramePacketCodec.CreateManifestFramePacket(
+                totalDataSymbols,
+                i,
+                chunkCount,
+                manifestPayload.AsSpan(chunkStart, chunkLength));
+        }
     }
 
     public bool TryDecodeFramePackets(IEnumerable<byte[]> packets, int expectedLength, out byte[] payload, out int recoveredBytes)
@@ -110,6 +141,8 @@ public sealed class DurabilityTransportCodec
 
         var bestSymbolsByKey = new Dictionary<(int GroupId, int SymbolId, bool IsParity), DurabilitySymbol>();
         var manifests = new List<StreamManifest>();
+        var manifestChunks = new Dictionary<bool, Dictionary<int, byte[]>>();
+        bool seenSymbolFrame = false;
         foreach (var packet in packets)
         {
             if (packet is null || packet.Length < FramePacket.HeaderBytes)
@@ -130,6 +163,7 @@ public sealed class DurabilityTransportCodec
                 symbol = new DurabilitySymbol(groupId, symbolId, false, payloadBytes)
                 {
                     SourceLength = payloadLength,
+                    GroupCount = groupCount,
                     RedundancyLevel = 1,
                     Hash = SHA256.HashData(payloadBytes)
                 };
@@ -140,29 +174,51 @@ public sealed class DurabilityTransportCodec
                 symbol = new DurabilitySymbol(groupId, _options.GroupSize, true, payloadBytes)
                 {
                     SourceLength = payloadLength,
+                    GroupCount = groupCount,
                     RedundancyLevel = 1,
                     Hash = SHA256.HashData(payloadBytes)
                 };
             }
             else
             {
-                if (frameType == FramePacket.FrameTypeManifest
-                    && StreamManifestCodec.TryDeserialize(payloadBytes, out var candidate)
-                    && candidate is not null)
+                if (frameType != FramePacket.FrameTypeManifest)
                 {
-                    // Manifest frames are not durability symbols; collect every intact copy so the
-                    // manifests can be reconciled below (CR-20260912-05 stage 3).
-                    manifests.Add(candidate);
+                    continue; // unknown frame type: not a symbol, not a manifest
                 }
 
+                // Manifest frames are not durability symbols. A manifest body larger than one
+                // frame's payload capacity (e.g. phase4's 88-byte frames) is split into chunks;
+                // chunk index/count ride in the otherwise-unused frameIndex/groupCount header
+                // fields. The start and end copies must be reassembled separately so a
+                // conflicting end copy is still detected by the reconciliation below instead of
+                // being deduplicated away (CR-20260912-05 stage 3 + phase4 chunking fix).
+                // Packets arrive in stream order: manifest frames seen before any data/parity
+                // frame belong to the start copy, everything after to the end copy.
+                var copyKey = !seenSymbolFrame;
+                if (!manifestChunks.TryGetValue(copyKey, out var chunkList))
+                {
+                    chunkList = new Dictionary<int, byte[]>();
+                    manifestChunks[copyKey] = chunkList;
+                }
+
+                chunkList.TryAdd(frameIndex, payloadBytes);
                 continue;
             }
+
+            seenSymbolFrame = true;
 
             var key = (symbol.GroupId, symbol.SymbolId, symbol.IsParity);
             if (!bestSymbolsByKey.TryGetValue(key, out var existing) || symbol.GetQualityScore() > existing.GetQualityScore())
             {
                 bestSymbolsByKey[key] = symbol;
             }
+        }
+
+        foreach (var chunkList in manifestChunks.Values)
+        {
+            // Reassemble every copy: a conflicting copy must reach the reconciliation below so
+            // the decode fails loudly instead of silently picking the start copy.
+            TryReassembleManifestChunks(chunkList, manifests);
         }
 
         if (!ReconcileManifests(manifests, out manifest))
@@ -172,6 +228,41 @@ public sealed class DurabilityTransportCodec
 
         var codec = new DurabilityMatrixCodec(_options);
         return codec.TryDecode(bestSymbolsByKey.Values, expectedLength, out payload, out recoveredBytes);
+    }
+
+    /// <summary>
+    /// Reassembles one copy's manifest chunk frames: concatenates chunks in contiguous index
+    /// order starting at 0 and deserializes the body. Returns true when a valid manifest was
+    /// recovered; a gap (both copies corrupt for the same chunk) simply yields false and the
+    /// decode proceeds manifest-less under the frame-only policy.
+    /// </summary>
+    private static bool TryReassembleManifestChunks(Dictionary<int, byte[]> chunks, List<StreamManifest> manifests)
+    {
+        if (chunks.Count == 0 || !chunks.TryGetValue(0, out _))
+        {
+            return false;
+        }
+
+        var body = new byte[chunks.Values.Sum(c => c.Length)];
+        int bodyOffset = 0;
+        for (int i = 0; chunks.TryGetValue(i, out var chunk); i++)
+        {
+            Buffer.BlockCopy(chunk, 0, body, bodyOffset, chunk.Length);
+            bodyOffset += chunk.Length;
+        }
+
+        if (bodyOffset != body.Length || bodyOffset == 0)
+        {
+            return false; // index gap: incomplete sequence
+        }
+
+        if (StreamManifestCodec.TryDeserialize(body, out var candidate) && candidate is not null)
+        {
+            manifests.Add(candidate);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

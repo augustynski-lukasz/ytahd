@@ -59,6 +59,7 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
                 groupSourceSymbols.Add(new DurabilitySymbol(groupIndex, symbolIndex, false, chunk)
                 {
                     SourceLength = symbolLength,
+                    GroupCount = sourceCount,
                     RedundancyLevel = 1
                 });
             }
@@ -82,6 +83,7 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
             symbols.Add(new DurabilitySymbol(groupIndex, _options.GroupSize, true, parity)
             {
                 SourceLength = parity.Length,
+                GroupCount = sourceCount,
                 RedundancyLevel = 1
             });
         }
@@ -103,6 +105,7 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
                 SymbolId = s.SymbolId,
                 IsParity = s.IsParity,
                 SourceLength = s.SourceLength,
+                GroupCount = s.GroupCount,
                 RedundancyLevel = s.RedundancyLevel,
                 Hash = s.Hash.ToArray(),
                 Data = s.Data.ToArray()
@@ -171,6 +174,7 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
             packets.Select(p => new DurabilitySymbol(p.GroupId, p.SymbolId, p.IsParity, p.Data.ToArray())
             {
                 SourceLength = p.SourceLength,
+                GroupCount = p.GroupCount,
                 RedundancyLevel = p.RedundancyLevel,
                 Hash = p.Hash.ToArray()
             }),
@@ -213,8 +217,14 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
         }
 
         var actualSourceIds = sourceSymbols.Select(s => s.SymbolId).ToHashSet();
+
+        // The group's real size comes from the packet metadata when available. The parity
+        // symbol's id is the full GroupSize even for a partial final group, so falling back to
+        // it would count never-existing symbols as losses and fail every short payload.
         var expectedSourceCount = paritySymbols.Count > 0
-            ? Math.Max(1, paritySymbols[0].SymbolId)
+            ? (paritySymbols[0].GroupCount > 0
+                ? paritySymbols[0].GroupCount
+                : Math.Max(1, paritySymbols[0].SymbolId))
             : (actualSourceIds.Count > 0 ? actualSourceIds.Max() + 1 : 0);
 
         var missingSourceIds = Enumerable.Range(0, expectedSourceCount)
@@ -269,6 +279,9 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
             }
         }
 
-        return recoveredSymbols.Count >= _options.ComputeRecoveryThreshold();
+        // The recovery threshold is derived from the full group size; a partial final group has
+        // fewer symbols by construction, so its budget scales with the real group size.
+        var requiredSymbols = Math.Max(1, expectedSourceCount - _options.ParitySymbolsPerGroup);
+        return recoveredSymbols.Count >= requiredSymbols;
     }
 }

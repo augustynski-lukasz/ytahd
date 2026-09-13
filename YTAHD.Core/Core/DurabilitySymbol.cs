@@ -26,6 +26,16 @@ public sealed class DurabilitySymbol
     public int SymbolId { get; }
     public bool IsParity { get; }
     public int SourceLength { get; set; }
+
+    /// <summary>
+    /// Number of source symbols the owning group actually contains. Zero when unknown; the
+    /// recovery policy then falls back to the parity symbol's identifier. Needed because the
+    /// final group of a payload is often partial while the parity symbol's id is always the
+    /// full group size — inferring the group size from that id would treat never-existing
+    /// symbols as losses and fail every short payload.
+    /// </summary>
+    public int GroupCount { get; set; }
+
     public int RedundancyLevel { get; set; }
     public byte[] Hash { get; set; }
     public byte[] Data { get; }

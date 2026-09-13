@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
+using YTAHD.Core.Application;
 
 namespace YTAHD.Core.Infrastructure
 {
@@ -19,12 +20,14 @@ namespace YTAHD.Core.Infrastructure
         private readonly int _height;
         private readonly int _fps;
         private readonly string _ffmpegExecutablePath;
+        private readonly VideoEncoder _videoEncoder;
 
-        public FFmpegWrapper(int width = 3840, int height = 2160, int fps = 60, string? ffmpegExecutablePath = null)
+        public FFmpegWrapper(int width = 3840, int height = 2160, int fps = 60, string? ffmpegExecutablePath = null, VideoEncoder videoEncoder = VideoEncoder.LibX264)
         {
             _width = width;
             _height = height;
             _fps = fps;
+            _videoEncoder = videoEncoder;
             _ffmpegExecutablePath = FfmpegToolPathResolver.ResolveFfmpegPath(ffmpegExecutablePath);
         }
 
@@ -72,6 +75,8 @@ namespace YTAHD.Core.Infrastructure
             // Use a container-compatible H.264 output for real mp4 smoke tests. The project keeps its
             // custom binary frame protocol and decoder tolerance; the real FFmpeg layer only needs a valid
             // codec/container pair so the encoded stream can be decoded back for end-to-end validation.
+            // Encoder-specific flags come from the owned abstraction (CR-20260912-06 stage 2).
+            string encoderArgs = FFmpegEncoderArguments.For(_videoEncoder);
             string args;
             if (!string.IsNullOrWhiteSpace(audioPcmFilePath))
             {
@@ -83,11 +88,11 @@ namespace YTAHD.Core.Infrastructure
                 // encoder is still marked experimental.
                 args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - " +
                        $"-f s16le -ar {AudioSampleRate} -ac 1 -i \"{audioPcmFilePath}\" " +
-                       $"-c:v libx264 -pix_fmt yuv420p -c:a aac -strict -2 -shortest \"{outputPath}\"";
+                       $"{encoderArgs} -c:a aac -strict -2 -shortest \"{outputPath}\"";
             }
             else
             {
-                args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
+                args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - {encoderArgs} -an \"{outputPath}\"";
             }
 
             var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)

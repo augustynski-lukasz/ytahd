@@ -53,12 +53,13 @@ namespace YTAHD.Tests
             _decodeWrapper = decodeWrapper;
         }
 
-        public IFFmpegWrapper CreateForEncode(int width, int height, int fps, string? ffmpegPath = null)
+        public IFFmpegWrapper CreateForEncode(int width, int height, int fps, string? ffmpegPath = null, VideoEncoder? videoEncoder = null)
         {
             _ = width;
             _ = height;
             _ = fps;
             _ = ffmpegPath;
+            _ = videoEncoder;
             return _encodeWrapper;
         }
 

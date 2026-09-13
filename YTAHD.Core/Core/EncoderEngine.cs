@@ -148,7 +148,9 @@ namespace YTAHD.Core.Core
                     UseDurabilityMatrix = true
                 };
 
-                framePackets = durabilityCodec.EncodeToFramePackets(data, manifest).ToArray();
+                framePackets = durabilityCodec
+                    .EncodeToFramePackets(data, manifest, payloadBytesPerFrame)
+                    .ToArray();
                 packetStopwatch.Stop();
                 timings.PacketBuildMilliseconds += packetStopwatch.Elapsed.TotalMilliseconds;
                 totalDataFrames = framePackets.Count(p => p[3] == FramePacket.FrameTypeData);

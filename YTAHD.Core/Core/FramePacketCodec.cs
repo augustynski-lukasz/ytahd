@@ -36,13 +36,27 @@ namespace YTAHD.Core.Core
         /// frames and can ride inside a durability parity group like any other symbol.
         /// </summary>
         public static byte[] CreateManifestFramePacket(int totalDataFrames, ReadOnlySpan<byte> manifestPayload)
-        {
-            byte[] manifestPacket = new byte[FramePacket.HeaderBytes + manifestPayload.Length];
-            WriteFrameHeader(manifestPacket, FramePacket.FrameTypeManifest, 0, totalDataFrames, 0, 1, manifestPayload.Length);
+            => CreateManifestFramePacket(totalDataFrames, 0, 1, manifestPayload);
 
-            var manifestHash = SHA256.HashData(manifestPayload);
+        /// <summary>
+        /// Creates a stream-manifest chunk frame. A manifest body larger than one frame's payload
+        /// capacity is split into chunks; <paramref name="chunkIndex"/>/<paramref name="chunkCount"/>
+        /// ride in the otherwise-unused frameIndex/groupCount header fields so single-chunk
+        /// manifests stay byte-identical with the pre-chunking wire format.
+        /// </summary>
+        public static byte[] CreateManifestFramePacket(int totalDataFrames, int chunkIndex, int chunkCount, ReadOnlySpan<byte> chunkPayload)
+        {
+            if (chunkIndex < 0 || chunkCount < 1 || chunkIndex >= chunkCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(chunkIndex), "Manifest chunk index must satisfy 0 <= chunkIndex < chunkCount.");
+            }
+
+            byte[] manifestPacket = new byte[FramePacket.HeaderBytes + chunkPayload.Length];
+            WriteFrameHeader(manifestPacket, FramePacket.FrameTypeManifest, chunkIndex, totalDataFrames, 0, chunkCount, chunkPayload.Length);
+
+            var manifestHash = SHA256.HashData(chunkPayload);
             Buffer.BlockCopy(manifestHash, 0, manifestPacket, GetHashOffset(FramePacket.FrameVersion), manifestHash.Length);
-            manifestPayload.CopyTo(manifestPacket.AsSpan(FramePacket.HeaderBytes, manifestPacket.Length - FramePacket.HeaderBytes));
+            chunkPayload.CopyTo(manifestPacket.AsSpan(FramePacket.HeaderBytes, manifestPacket.Length - FramePacket.HeaderBytes));
 
             return manifestPacket;
         }

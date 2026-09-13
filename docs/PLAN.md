@@ -170,11 +170,10 @@ is one commit with its ADR (`F-YYYYMMDD-NN` for A/B stages, per repo convention)
 
 ## Workstream D — Optional FFmpeg GPU acceleration
 
-**Status: accepted plan, not started.**
-**Design ADR:** `CR-20260911-03-gpu-acceleration-plan.md` (`Accepted`; flip to
-`Implemented` in the commit that lands the production path).
-**Backlog items:** GPU encoder/decoder option model, hardware capability detection,
-real-codec validation matrix, release packaging documentation.
+**Status: implemented (D1–D5 complete, 2026-09-13), scoped to QSV.** Hardware probing
+(GTX 1060 NVENC fails; Intel UHD 630 QSV works) scoped the validated profile to `h264_qsv`;
+NVENC/AMF remain declared-but-experimental.
+**Decision ADR:** `CR-20260912-06-gpu-acceleration-qsv-scoping.md` (`Implemented`).
 
 Goal: keep CPU `libx264` as the default production baseline while adding opt-in hardware
 acceleration for users with supported FFmpeg builds and GPU drivers. The first production

@@ -39,6 +39,8 @@ dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
 | `--fps`, `-r`             | `60`          | Output framerate.                                           |
 | `--modulator`, `-M`       | `phase1`      | Modulation mode: `phase1`, `phase2`, `phase3`, or `phase4`. |
 | `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.             |
+| `--video-encoder`, `-E` | `libx264` | Video encoder: `libx264` (CPU baseline), `h264_qsv` (Intel Quick Sync), `h264_nvenc`/`h264_amf` (experimental). |
+| `--hwaccel` | `none` | Decode-side hardware acceleration for experiments: `none`, `qsv`, `cuda`, `d3d11va`. |
 | `--audio-clock`           | `false`       | Mux an audio FSK datagram clock alongside the video.        |
 
 ### Decode
@@ -93,9 +95,39 @@ dotnet run --project YTAHD.Cli -- decode input.mp4 output.bin --ffmpeg-path "D:\
 
 The Phase 1 baseline currently targets the real H.264 path (`libx264`), which is the practical codec pair used by the smoke-validation workflow. This is now treated as the stable production contract for future modulation work until a new baseline is explicitly approved.
 
+### GPU acceleration (Intel Quick Sync)
+
+Hardware encoding is opt-in. The default remains CPU `libx264`; selecting a GPU encoder
+requires the FFmpeg build to ship the encoder and the machine to expose a working device
+(see `docs/decisions/CR-20260912-06-gpu-acceleration-qsv-scoping.md`):
+
+```powershell
+dotnet run --project YTAHD.Cli -- encode input.bin output.mp4 --video-encoder h264_qsv
+```
+
+- **QSV (`h264_qsv`)** is the only hardware-validated profile: every modulator
+  (`phase1`–`phase4`) round-trips a real QSV encode with byte-exact payload recovery and
+  `integrity=passed`. On the reference machine (Intel UHD 630) a 30-frame 640x480 encode
+  ran ~1.7x faster than `libx264`.
+- **NVENC (`h264_nvenc`) and AMF (`h264_amf`)** are declared but experimental: they are
+  validated only by capability probing, not by the durability bar, and may fail on your
+  driver/build.
+- The CLI probes `ffmpeg -encoders` / `ffmpeg -hwaccels` before a long encode and fails
+  fast with an actionable message when the requested encoder is missing or the device is
+  unavailable.
+
+Troubleshooting common GPU failures:
+
+| Symptom | Meaning | Fix |
+| --------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------- |
+| `Unknown encoder 'h264_qsv'` | FFmpeg build lacks the encoder | Use a full/gpl-shared FFmpeg build |
+| `OpenEncodeSessionEx failed: unsupported device` | Driver rejects the NVENC session (common on GeForce consumer GPUs for some builds) | Update drivers, or fall back to `libx264` |
+| `No device available for encoder` / probe failure | No usable GPU device for the requested profile | Run without `--video-encoder` (CPU baseline) |
+| `implied codec not found` / pixel-format errors | Encoder cannot accept the input pixel format | Keep the default `yuv420p` conversion path |
+
 ### Current implementation status
 
-The real FFmpeg pipeline is working and the lossy decoder has been hardened to tolerate H.264 drift, duplicate frame runs, and empty/weak payloads without silently accepting corrupted output. The packet protocol and quality-scoring logic have been centralized into dedicated helpers.
+The real FFmpeg pipeline is working and the lossy decoder has been hardened to tolerate H.264 drift, duplicate frame runs, and empty/weak payloads without silently accepting corrupted output. The packet protocol and quality-scoring logic have been centralized into dedicated helpers. Hardware encoding via Intel Quick Sync (`h264_qsv`) is opt-in and validated against the same durability bar as the CPU baseline (see the GPU acceleration section above).
 
 Phase 1 (monochrome binary grid) and Phase 2 (pseudo-QAM multi-channel) are the production-validated baselines. Phase 3 (DCT-domain carrier) is fully implemented: each 8×8 block is synthesised via IDCT from a DC term and 8 low-frequency AC carriers, and bits are recovered on decode by reading forward DCT coefficient signs. All three modulator paths pass the full test suite including real libx264 round-trip smoke checks. The Data Durability Matrix (parity-based symbol transport) is integrated into the service pipeline and verified under real FFmpeg output.
 

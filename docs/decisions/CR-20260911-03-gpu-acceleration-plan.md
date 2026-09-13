@@ -1,6 +1,6 @@
 # CR-20260911-03 - GPU Acceleration Plan
 
-**Date:** 2026-09-11 **Status:** Accepted
+**Date:** 2026-09-11 **Status:** Superseded by `CR-20260912-06-gpu-acceleration-qsv-scoping.md` (Implemented)
 **Area:** FFmpeg wrapper, CLI options, decode pipeline, release documentation
 
 ## Context

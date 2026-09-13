@@ -8,6 +8,7 @@ public sealed class DurabilityPacket
     public int SymbolId { get; init; }
     public bool IsParity { get; init; }
     public int SourceLength { get; init; }
+    public int GroupCount { get; init; }
     public int RedundancyLevel { get; init; }
     public byte[] Hash { get; init; } = Array.Empty<byte>();
     public byte[] Data { get; init; } = Array.Empty<byte>();

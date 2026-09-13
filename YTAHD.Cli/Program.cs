@@ -12,6 +12,58 @@ using YTAHD.Core.Modulation;
 // Shared help text for --jobs on both the encode and decode commands.
 const string JobsOptionHelp = "Degree of parallelism: 'auto' (default, conservative core-count based workers), 'serial' (fully single-threaded for deterministic runs), '0' (sequential frames; inner loops still use the machine's processors), or an explicit frame worker count. See docs/decisions/CR-20260912-01-degree-of-parallelism-controls.md.";
 
+static bool TryParseVideoEncoder(string? value, out VideoEncoder encoder, out string? error)
+{
+    encoder = VideoEncoder.LibX264;
+    error = null;
+
+    var trimmed = (value ?? string.Empty).Trim().ToLowerInvariant();
+    switch (trimmed)
+    {
+        case "" or "libx264" or "cpu":
+            encoder = VideoEncoder.LibX264;
+            return true;
+        case "h264_qsv" or "qsv":
+            encoder = VideoEncoder.H264Qsv;
+            return true;
+        case "h264_nvenc" or "nvenc":
+            encoder = VideoEncoder.H264Nvenc;
+            return true;
+        case "h264_amf" or "amf":
+            encoder = VideoEncoder.H264Amf;
+            return true;
+        default:
+            error = $"Invalid --video-encoder value '{value}'. Use 'libx264' (default), 'h264_qsv', 'h264_nvenc', or 'h264_amf'.";
+            return false;
+    }
+}
+
+static bool TryParseHwaccel(string? value, out HardwareAcceleration acceleration, out string? error)
+{
+    acceleration = HardwareAcceleration.None;
+    error = null;
+
+    var trimmed = (value ?? string.Empty).Trim().ToLowerInvariant();
+    switch (trimmed)
+    {
+        case "" or "none":
+            acceleration = HardwareAcceleration.None;
+            return true;
+        case "qsv":
+            acceleration = HardwareAcceleration.Qsv;
+            return true;
+        case "cuda":
+            acceleration = HardwareAcceleration.Cuda;
+            return true;
+        case "d3d11va":
+            acceleration = HardwareAcceleration.D3D11Va;
+            return true;
+        default:
+            error = $"Invalid --hwaccel value '{value}'. Use 'none' (default), 'qsv', 'cuda', or 'd3d11va'.";
+            return false;
+    }
+}
+
 static IModulator CreateModulator(string mode)
 {
     return mode.Trim().ToLowerInvariant() switch
@@ -129,6 +181,8 @@ var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phas
 var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "-F" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
 var optAudioClock = new Option<bool>(new[] { "--audio-clock", "-A" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 var optJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
+var optVideoEncoder = new Option<string>(new[] { "--video-encoder", "-E" }, () => "libx264", "Video encoder: 'libx264' (default CPU baseline), 'h264_qsv' (Intel Quick Sync), 'h264_nvenc' (NVIDIA, experimental), or 'h264_amf' (AMD, experimental). See docs/decisions/CR-20260912-06-gpu-acceleration-qsv-scoping.md.");
+var optHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
@@ -137,6 +191,8 @@ encodeCommand.AddOption(optModulator);
 encodeCommand.AddOption(optFfmpegPath);
 encodeCommand.AddOption(optAudioClock);
 encodeCommand.AddOption(optJobs);
+encodeCommand.AddOption(optVideoEncoder);
+encodeCommand.AddOption(optHwaccel);
 
 encodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
@@ -150,6 +206,8 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
     var ffmpegPath = ctx.ParseResult.GetValueForOption(optFfmpegPath);
     var useAudioClock = ctx.ParseResult.GetValueForOption(optAudioClock);
     var jobs = ctx.ParseResult.GetValueForOption(optJobs);
+    var encoderValue = ctx.ParseResult.GetValueForOption(optVideoEncoder);
+    var hwaccelValue = ctx.ParseResult.GetValueForOption(optHwaccel);
 
     if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
     {
@@ -158,11 +216,25 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
         return;
     }
 
+    if (!TryParseVideoEncoder(encoderValue, out var videoEncoder, out var encoderError))
+    {
+        Console.Error.WriteLine(encoderError);
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    if (!TryParseHwaccel(hwaccelValue, out var hwaccel, out var hwaccelError))
+    {
+        Console.Error.WriteLine(hwaccelError);
+        ctx.ExitCode = 1;
+        return;
+    }
+
     var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}, parallelism={parallelism}] ");
-    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
+    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, encoder={FFmpegEncoderArguments.CodecName(videoEncoder)}, hwaccel={hwaccel}, audioClock={useAudioClock}, parallelism={parallelism}] ");
+    var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath, videoEncoder));
     var payloadBytes = File.Exists(input.FullName) ? new FileInfo(input.FullName).Length : 0;
     await service.EncodeAsync(new EncodeOptions
     {
@@ -174,6 +246,8 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
         Fps = fps,
         UseAudioClock = useAudioClock,
         MaxDegreeOfParallelism = requestedJobs,
+        VideoEncoder = videoEncoder,
+        HardwareAcceleration = hwaccel,
         VerifyFfmpeg = true
     });
 

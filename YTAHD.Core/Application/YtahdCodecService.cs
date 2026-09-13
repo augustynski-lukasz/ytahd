@@ -26,7 +26,7 @@ public sealed class YtahdCodecService
         if (string.IsNullOrWhiteSpace(options.InputFile)) throw new ArgumentException("InputFile is required.", nameof(options));
         if (string.IsNullOrWhiteSpace(options.OutputVideo)) throw new ArgumentException("OutputVideo is required.", nameof(options));
 
-        var ffmpeg = _ffmpegFactory.CreateForEncode(options.Width, options.Height, options.Fps);
+        var ffmpeg = _ffmpegFactory.CreateForEncode(options.Width, options.Height, options.Fps, videoEncoder: options.VideoEncoder);
         var engine = new EncoderEngine(_modulator, ffmpeg, options);
 
         if (options.VerifyFfmpeg)
