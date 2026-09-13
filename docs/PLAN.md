@@ -150,9 +150,12 @@ is one commit with its ADR (`F-YYYYMMDD-NN` for A/B stages, per repo convention)
   _within a group it has a parity packet for_; a whole parity group vanishing (data
   **and** parity together) raises no error today and silently truncates the output. The
   audio clock is unaffected by dropped video frames, so it catches this case.
-- **Scope decision:** this is detection/observability only, not automated repair. Actually
-  _recovering_ a fully-lost group (or wiring the durability matrix in for multi-frame-loss
-  repair, as the original design called for) remains deferred — see `docs/BACKLOG.md`.
+- **Scope decision:** C1 itself is detection/observability only. The deferred repair
+  follow-up has since landed (CR-20260913-02, 2026-09-13): hole-tolerant reconstruction —
+  each parity group recovers independently, wholly-lost groups become zero-filled holes with
+  the exact group ids surfaced in `DecodeMetrics.MissingDatagramIds`, and integrity still
+  fails loudly instead of silently accepting corrupt output. See
+  `docs/decisions/CR-20260913-02-combined-clock-multi-erasure-repair.md`.
   Deterministic fake-wrapper test used instead of the originally planned real-codec
   `-vf select` decimation test (more reliable, exercises the same recovery/detection code
   paths without real-codec flakiness).
