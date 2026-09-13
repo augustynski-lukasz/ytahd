@@ -121,6 +121,17 @@ static string FormatQualityVerdict(DecodeMetrics metrics)
     return $"degraded ({string.Join(", ", concerns)})";
 }
 
+/// <summary>
+/// The CLI's durability-matrix configuration (F-20260914-01): the same conservative defaults
+/// the test suite pins (32-byte symbols, groups of 4, one parity symbol per group).
+/// </summary>
+static DurabilityMatrixOptions DefaultDurabilityMatrixOptions() => new()
+{
+    SymbolSize = 32,
+    GroupSize = 4,
+    ParitySymbolsPerGroup = 1
+};
+
 static string FormatParallelism(int requested, int resolved)
 {
     if (requested == ParallelismPolicy.Auto)
@@ -217,6 +228,7 @@ var optAudioClock = new Option<bool>(new[] { "--audio-clock", "-A" }, () => fals
 var optJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
 var optVideoEncoder = new Option<string>(new[] { "--video-encoder", "-E" }, () => "libx264", "Video encoder: 'libx264' (default CPU baseline), 'h264_qsv' (Intel Quick Sync), 'h264_nvenc' (NVIDIA, experimental), or 'h264_amf' (AMD, experimental). See docs/decisions/CR-20260912-06-gpu-acceleration-qsv-scoping.md.");
 var optHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
+var optDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "Use the durability matrix (CR-20260913-02): per-symbol hashes, XOR parity groups, and a stream manifest with SHA-256 whole-payload verification. Decode reports integrity=passed/failed/frame-only.");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
@@ -227,6 +239,7 @@ encodeCommand.AddOption(optAudioClock);
 encodeCommand.AddOption(optJobs);
 encodeCommand.AddOption(optVideoEncoder);
 encodeCommand.AddOption(optHwaccel);
+encodeCommand.AddOption(optDurability);
 
 encodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
@@ -242,6 +255,7 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
     var jobs = ctx.ParseResult.GetValueForOption(optJobs);
     var encoderValue = ctx.ParseResult.GetValueForOption(optVideoEncoder);
     var hwaccelValue = ctx.ParseResult.GetValueForOption(optHwaccel);
+    var useDurability = ctx.ParseResult.GetValueForOption(optDurability);
 
     if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
     {
@@ -267,7 +281,7 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
     var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, encoder={FFmpegEncoderArguments.CodecName(videoEncoder)}, hwaccel={hwaccel}, audioClock={useAudioClock}, parallelism={parallelism}] ");
+    Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, encoder={FFmpegEncoderArguments.CodecName(videoEncoder)}, hwaccel={hwaccel}, audioClock={useAudioClock}, durability={useDurability}, parallelism={parallelism}] ");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath, videoEncoder));
     var payloadBytes = File.Exists(input.FullName) ? new FileInfo(input.FullName).Length : 0;
     await service.EncodeAsync(new EncodeOptions
@@ -279,6 +293,8 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
         Height = height,
         Fps = fps,
         UseAudioClock = useAudioClock,
+        UseDurabilityMatrix = useDurability,
+        DurabilityMatrixOptions = useDurability ? DefaultDurabilityMatrixOptions() : null,
         MaxDegreeOfParallelism = requestedJobs,
         VideoEncoder = videoEncoder,
         HardwareAcceleration = hwaccel,
@@ -300,11 +316,13 @@ var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-pa
 var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 var decodeJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
 var decodeHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
+var decodeDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "Enable durability-matrix reconstruction (CR-20260913-02): hole-tolerant multi-erasure repair with a loss map; requires the stream to have been encoded with --durability.");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);
 decodeCommand.AddOption(decodeAudioClock);
 decodeCommand.AddOption(decodeJobs);
 decodeCommand.AddOption(decodeHwaccel);
+decodeCommand.AddOption(decodeDurability);
 decodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
     var input = ctx.ParseResult.GetValueForArgument(decodeIn);
@@ -314,6 +332,7 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var useAudioClock = ctx.ParseResult.GetValueForOption(decodeAudioClock);
     var jobs = ctx.ParseResult.GetValueForOption(decodeJobs);
     var hwaccelValue = ctx.ParseResult.GetValueForOption(decodeHwaccel);
+    var useDurability = ctx.ParseResult.GetValueForOption(decodeDurability);
 
     if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
     {
@@ -332,13 +351,15 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, hwaccel={hwaccel}, audioClock={useAudioClock}, parallelism={parallelism}]");
+    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, hwaccel={hwaccel}, audioClock={useAudioClock}, durability={useDurability}, parallelism={parallelism}]");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     await service.DecodeAsync(new DecodeOptions
     {
         InputVideo = input.FullName,
         OutputFile = output.FullName,
         UseAudioClock = useAudioClock,
+        UseDurabilityMatrix = useDurability,
+        DurabilityMatrixOptions = useDurability ? DefaultDurabilityMatrixOptions() : null,
         HardwareAcceleration = hwaccel,
         MaxDegreeOfParallelism = requestedJobs,
         VerifyFfmpeg = true,
