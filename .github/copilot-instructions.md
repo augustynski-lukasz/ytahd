@@ -154,6 +154,27 @@ What was decided and implemented.
 Impact, trade-offs, known limitations, follow-up items.
 ```
 
+### ADR debugging resolution sections (mandatory for bug-fix ADRs)
+
+When an ADR resolves a bug, a failing test, or a non-trivial fix, add these sections
+**after "Decision"** (see `docs/PROBLEM.md` for worked examples). A design-only ADR
+omits them; a fix ADR must not:
+
+- **Observed failure** — the concrete symptom: failing test name (or CLI error),
+  exact assertion/error message, and the confusing red herrings encountered (e.g. an
+  earlier run that contradicted the current behavior).
+- **Root cause** — the actual defect(s), stated precisely (which file, which code path,
+  what the wrong logic was). If there are multiple stacked defects, list each separately
+  and explain how they masked each other.
+- **Resolution** — what changed for each defect, and why the change is backward-safe
+  (or explicitly not). One bullet per defect, mirroring the root-cause list.
+- **Lessons** — non-obvious debugging traps worth remembering: wrong assumptions that
+  cost cycles, stale-binary pitfalls, discriminator-test coverage gaps. Only include
+  lessons that were actually paid for in this session, not generic advice.
+
+These sections record the debugging path, not the design rationale — "Context/Decision/
+Consequences" say _what and why_, these say _how it broke and how that was found_.
+
 Status lifecycle: `Accepted` (decision made, code not landed) → `Implemented` (code landed;
 update in the same commit as the code) → `Superseded` (link the replacing ADR).
 

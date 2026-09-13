@@ -176,3 +176,53 @@ The project already enforces the real validation standard:
 - CLI smoke checks using explicit `--ffmpeg-path` and actual `dotnet run --project ... -- encode/decode`
 
 The Phase 1 and Phase 2 real-world checks are green; the Phase 3 DCT path remains the outstanding problem to continue resolving.
+
+---
+
+# Combined-clock multi-erasure: empty hole map (resolved — 2026-09-13)
+
+> **Second historical record in this file.** Problem and resolution for the failing
+> end-to-end test in CR-20260913-02 (hole-tolerant reconstruction). Kept for the same
+> reason as the Phase 3 notes above: the debugging path contained non-obvious traps.
+
+## Observed failure
+
+`CombinedClockArbitrationTests.SilentlyDropped_WholeParityGroup_Yields_Documented_Hole_And_Loss_Map`
+failed at `Assert.Single(metrics.MissingDatagramIds)` with "The collection was empty", while
+an earlier binary reported the map correctly containing `[60]`. The scenario encodes with the
+durability matrix, truncates the tail so the stream's final parity group (data AND parity)
+vanishes, and expects one hole entry plus a zero-filled tail.
+
+## Root cause: two stacked defects
+
+1. **Test truncation math (integer vs ceiling division).**
+   `symbolsInLastGroup` computed `(totalPayloadBytes - lastGroupIndex * groupBytes) / SymbolSize`
+   with integer division: `(7768 - 60*128) / 32 = 88/32 = 2`, but the real partial group holds
+   ceil(88/32) = **3** symbols. The test therefore dropped 12 physical frames instead of 15,
+   leaving group 60 with symbol 0 alive but symbols 1-2 and the parity frame gone — a partial
+   loss, not the whole-group loss the test intended.
+2. **Codec metadata bug in `DurabilityMatrixCodec.TryRecoverGroup`.**
+   With parity ABSENT, `expectedSourceCount` fell back to `actualSourceIds.Max() + 1` (= 1)
+   and ignored the surviving data symbols' `GroupCount` header metadata (which says 3). Group
+   60 then "recovered" with a single symbol: no missing ids, no parity check, no hole, and a
+   silently truncated output. This is exactly the failure mode CR-20260913-02 was meant to
+   eliminate, reachable only via the partial-group-with-lost-parity shape.
+
+## Resolution
+
+- Test: use ceiling division for the final group's symbol count.
+- Codec: consult data symbols' `GroupCount` (max) before the legacy `Max()+1` fallback;
+  parity presence still takes precedence. Old symbols without metadata (default 0) keep the
+  old fallback, so the change is backward-safe.
+
+## Lessons
+
+- A red test that *previously passed at a different assert* ("Expected: 1, Actual: 60")
+  does not mean the fix works or fails consistently — that run used different test math.
+  Re-derive all geometry arithmetic from the actual encoder debug log
+  (`payloadBytesPerFrame=971`, `headerBytes=53` in this session), never from remembered
+  expectations.
+- Whole-group hole detection and partial-group silent truncation are different code paths;
+  validating one does not validate the other. The discriminator test must exercise both.
+- Final evidence: CombinedClockArbitrationTests 4/4, DurabilityMatrixEdgeCaseTests 9/9,
+  full suite 299/299 green (1 m 41 s). Shipped as commit `8b4ee38`.

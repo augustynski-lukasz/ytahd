@@ -62,3 +62,4 @@ coverage.*
 secrets.json
 probe-input.bin
 .release-validation/
+.vscode/settings.json
