@@ -8,10 +8,13 @@ namespace YTAHD.Core.Modulation
     /// channel is reserved as a parity / calibration value while the low/high nibble pair remain
     /// recoverable without loss.
     /// </summary>
-    public sealed class PseudoQamModulator : IModulator
+    public sealed class PseudoQamModulator : IModulator, IFrameBitDecoderProvider
     {
         public int MacroblockWidth => 16;
         public int MacroblockHeight => 16;
+
+        /// <inheritdoc />
+        public Core.IFrameBitDecoder CreateFrameBitDecoder() => new Core.PseudoQamFrameBitDecoder();
 
         public int GetPayloadBytesPerFrame(ModulatorGeometry geometry)
         {

@@ -1,6 +1,6 @@
 # CR-20260913-07 — Modulator-owned frame-bit decoder resolution (capability interface)
 
-**Date:** 2026-09-13 **Status:** Accepted
+**Date:** 2026-09-13 **Status:** Implemented
 **Area:** `YTAHD.Core/Core` (`FrameBitDecoderFactory`, `IModulator` implementors),
 `YTAHD.Tests`
 
@@ -34,3 +34,12 @@ construction, not at first frame).
 - `FrameBitDecoderFactory` shrinks to capability resolution + decorator unwrapping.
 - Sequencing: this is the only R6-batch item with design content; it ships as its own
   commit/ADR, separate from the `TD-20260913-02` cleanup batch.
+
+## Validation
+
+- New `FrameBitDecoderFactoryTests` (7 tests): capability resolution for all four shipped
+  modulators, decorator-wrapped resolution, fail-fast `NotSupportedException` naming the
+  modulator type for a capability-less modulator, and inner-degree-of-parallelism
+  inheritance through the capability path.
+- Full suite: 313/313 passed (306 prior + 7 new), including the real-FFmpeg round trips
+  that exercise every modulator's decoder through the new resolution path.

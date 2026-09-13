@@ -30,6 +30,12 @@ namespace YTAHD.Core.Core
         /// modulator's <see cref="IParallelismConfigurable.InnerDegreeOfParallelism"/> so a single
         /// assignment on the modulator reaches every decoder the pipeline creates for it.
         /// </summary>
+        /// <remarks>
+        /// Resolution order (CR-20260913-07): the modulator-owned
+        /// <c>IFrameBitDecoderProvider</c> capability first, then the legacy type ladder as a
+        /// fallback during migration. A modulator with neither fails here — at registration
+        /// time — instead of mid-decode after FFmpeg has already run.
+        /// </remarks>
         public static IFrameBitDecoder CreateForModulator(IModulator modulator)
         {
             if (modulator == null)
@@ -46,7 +52,11 @@ namespace YTAHD.Core.Core
 
             IFrameBitDecoder decoder;
 
-            if (modulator is BinaryGridModulator)
+            if (modulator is IFrameBitDecoderProvider provider)
+            {
+                decoder = provider.CreateFrameBitDecoder();
+            }
+            else if (modulator is BinaryGridModulator)
             {
                 decoder = new BinaryGridFrameBitDecoder();
             }
@@ -64,7 +74,7 @@ namespace YTAHD.Core.Core
             }
             else
             {
-                throw new NotSupportedException($"No frame bit decoder available for modulator '{modulator.GetType().Name}'.");
+                throw new NotSupportedException($"No frame bit decoder available for modulator '{modulator.GetType().Name}'. Implement {nameof(YTAHD.Core.Modulation.IFrameBitDecoderProvider)} on the modulator.");
             }
 
             if (modulator is IParallelismConfigurable modulatorParallelism

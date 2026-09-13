@@ -22,9 +22,6 @@ Phase 4 follow-up research below is the natural next protocol work).
 - **G5 — Packet buffer-length contract (R5; fixes F9).** `PseudoQamModulator.
 GetPacketBufferLength` returns bytes like its siblings; add cross-modulator parity test.
   ADR `CR-20260913-06-packet-buffer-length-contract.md`.
-- **G6 — Modulator-owned decoder resolution (R6a; fixes F11).** `IFrameBitDecoderProvider`
-  capability interface; fail at registration, not mid-decode. ADR
-  `CR-20260913-07-modulator-owned-decoder-resolution.md`.
 - **G7 — Cleanup batch (R6b; fixes F8, F10, F12, F13).** Single ffprobe resolution, cached
   per-profile tile tables, hoisted `NormalizeModulator`, delete `test-output.txt`. ADR
   `TD-20260913-02-review-cleanup-batch.md`.

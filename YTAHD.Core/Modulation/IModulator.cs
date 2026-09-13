@@ -58,4 +58,17 @@ namespace YTAHD.Core.Modulation
         /// <summary>Gets the modulator this wrapper forwards to.</summary>
         IModulator Inner { get; }
     }
+
+    /// <summary>
+    /// Optional capability interface (CR-20260913-07): a modulator that can supply its own
+    /// frame-bit decoder implements this, so decoder resolution is owned by the modulator
+    /// instead of a type ladder in <c>FrameBitDecoderFactory</c>. Adding a new modulator then
+    /// requires no factory edit, and a forgotten implementation fails at registration time
+    /// (factory throws immediately) rather than mid-decode after FFmpeg has already run.
+    /// </summary>
+    public interface IFrameBitDecoderProvider
+    {
+        /// <summary>Creates the frame-bit decoder matching this modulator's modulation scheme.</summary>
+        Core.IFrameBitDecoder CreateFrameBitDecoder();
+    }
 }

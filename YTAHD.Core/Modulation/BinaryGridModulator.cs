@@ -5,10 +5,13 @@ namespace YTAHD.Core.Modulation
     /// <summary>
     /// Phase 1: Monochrome 16x16 macroblock modulator placeholder.
     /// </summary>
-    public sealed class BinaryGridModulator : IModulator
+    public sealed class BinaryGridModulator : IModulator, IFrameBitDecoderProvider
     {
         private readonly int _macroblockWidth;
         private readonly int _macroblockHeight;
+
+        /// <inheritdoc />
+        public Core.IFrameBitDecoder CreateFrameBitDecoder() => new Core.BinaryGridFrameBitDecoder();
 
         public BinaryGridModulator(int macroblockWidth = 16, int macroblockHeight = 16)
         {

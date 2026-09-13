@@ -11,7 +11,7 @@ namespace YTAHD.Core.Modulation
     /// gradients that video codecs preserve with high fidelity.
     /// On decode, a forward DCT recovers the coefficient signs.
     /// </summary>
-    public sealed class DctModulator : IModulator, IParallelismConfigurable
+    public sealed class DctModulator : IModulator, IParallelismConfigurable, IFrameBitDecoderProvider
     {
         private const int BlockSize = DctCarrierBasis.BlockSize; // 8
         // 1 byte per 8×8 block (8 carrier positions, 1 bit each).
@@ -19,6 +19,9 @@ namespace YTAHD.Core.Modulation
 
         public int MacroblockWidth => BlockSize;
         public int MacroblockHeight => BlockSize;
+
+        /// <inheritdoc />
+        public Core.IFrameBitDecoder CreateFrameBitDecoder() => new Core.DctFrameBitDecoder();
 
         /// <inheritdoc />
         public int InnerDegreeOfParallelism { get; set; } = Environment.ProcessorCount;

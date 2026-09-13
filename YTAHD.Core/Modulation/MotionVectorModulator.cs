@@ -10,7 +10,7 @@ namespace YTAHD.Core.Modulation
     /// (dx, dy) pixel offset that encodes one payload byte (displaced frame). Decoding is
     /// single-frame: a full search over the finite offset alphabet locates each tile.
     /// </summary>
-    public sealed class MotionVectorModulator : IModulator, IFrameEmissionStrategy
+    public sealed class MotionVectorModulator : IModulator, IFrameEmissionStrategy, IFrameBitDecoderProvider
     {
         private readonly MotionTileProfile _profile;
         private readonly int CellSize;
@@ -18,6 +18,9 @@ namespace YTAHD.Core.Modulation
         private readonly int Guard;
         private readonly byte[,] Texture;
         private const int BytesPerBlock = 1;
+
+        /// <inheritdoc />
+        public Core.IFrameBitDecoder CreateFrameBitDecoder() => new Core.MotionFrameBitDecoder(_profile);
 
         public MotionVectorModulator(MotionTileProfile? profile = null)
         {
