@@ -1,6 +1,6 @@
 # CR-20260913-05 — Resolve `DecodeThresholds`: wire as advisory decode verdict
 
-**Date:** 2026-09-13 **Status:** Accepted
+**Date:** 2026-09-13 **Status:** Implemented
 **Area:** `YTAHD.Core/Core/DecodeMetrics.cs` (`DecodeThresholds`), `YTAHD.Cli/Program.cs`,
 `YTAHD.Tests` (`DecoderMetricsTests`)
 
@@ -39,3 +39,16 @@ honest diagnostics — consistent with the project's diagnostics bar.
 - Risk: threshold defaults may flag legitimate heavy-parity-recovery decodes as "degraded";
   if that proves noisy in practice, tune the defaults in a follow-up commit under this ADR
   (advisory output only, so mis-tuning cannot break decodes).
+
+## Validation
+
+- New `DecodeQualityVerdictTests` (6 tests): healthy metrics → `within-thresholds`; each
+  threshold breach reported by name (`invalidPacketRatio=…`, `duplicateQuality=…`,
+  `recoveredGroups=…`); multiple concerns listed together; zero-frames-seen stays
+  `within-thresholds` (no divide-by-zero on the ratio).
+- Live CLI smoke check: a phase1 round trip's decode summary now contains
+  `quality=within-thresholds` alongside `integrity=…`.
+- Full suite: 323/323 passed (317 prior + 6 new).
+- Implementation note: the ratio is formatted with `CultureInfo.InvariantCulture` — a
+  first cut using the default `:F2` format rendered `0,40` on German-locale machines,
+  which the tests caught immediately.

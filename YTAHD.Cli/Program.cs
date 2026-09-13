@@ -87,6 +87,40 @@ static string FormatMilliseconds(double milliseconds)
     return milliseconds.ToString("F1", CultureInfo.InvariantCulture);
 }
 
+/// <summary>
+/// Advisory quality verdict for the decode summary (CR-20260913-05): evaluates the
+/// operational quality thresholds against the decode metrics. Purely informational —
+/// integrity remains the sole authority for output acceptance; a stream can legitimately
+/// decode byte-exact while its quality metrics are degraded (heavy parity recovery, for
+/// example, legitimately raises the recovered-group count).
+/// </summary>
+static string FormatQualityVerdict(DecodeMetrics metrics)
+{
+    var thresholds = new DecodeThresholds();
+    if (thresholds.IsSatisfiedBy(metrics))
+    {
+        return "within-thresholds";
+    }
+
+    var concerns = new List<string>();
+    if (metrics.TotalFramesSeen > 0 && metrics.InvalidPacketRatio > thresholds.MaxInvalidPacketRatio)
+    {
+        concerns.Add($"invalidPacketRatio={metrics.InvalidPacketRatio.ToString("F2", CultureInfo.InvariantCulture)}");
+    }
+
+    if (metrics.StrongestDuplicateQuality < thresholds.MinDuplicateRunQuality)
+    {
+        concerns.Add($"duplicateQuality={metrics.StrongestDuplicateQuality}");
+    }
+
+    if (metrics.RecoveredGroupCount > thresholds.MaxRecoveredGroups)
+    {
+        concerns.Add($"recoveredGroups={metrics.RecoveredGroupCount}");
+    }
+
+    return $"degraded ({string.Join(", ", concerns)})";
+}
+
 static string FormatParallelism(int requested, int resolved)
 {
     if (requested == ParallelismPolicy.Auto)
@@ -315,7 +349,7 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
     var totalVideoFrames = TryGetVideoFrameCount(input.FullName, ffmpegPath);
     var completionPercentage = totalVideoFrames > 0 ? Math.Min(100d, decodeMetrics.TotalFramesSeen * 100d / totalVideoFrames).ToString("F1", CultureInfo.InvariantCulture) + "%" : "n/a";
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, parallelism={parallelism}, integrity={decodeMetrics.IntegrityStatus.ToString().ToLowerInvariant()}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, parallelism={parallelism}, integrity={decodeMetrics.IntegrityStatus.ToString().ToLowerInvariant()}, quality={FormatQualityVerdict(decodeMetrics)}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
 });
 
 root.AddCommand(encodeCommand);
