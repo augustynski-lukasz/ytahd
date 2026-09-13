@@ -434,6 +434,92 @@ constraint because one 4K RGB frame is about 24 MB and one 4K RGBA frame is abou
 
 ---
 
+## Workstream G — Refactoring plan from `docs/REVIEW.md` Review 1 (2026-09-13)
+
+**Status: planned (design ADRs `Accepted`; not started).**
+**Source:** `docs/REVIEW.md` Review 1 — 13 findings (0 critical / 5 major / 6 minor / 2 nit),
+baseline `dotnet build` exit 0, 0 warnings.
+**Backlog items:** `Refactoring plan from docs/REVIEW.md Review 1` (G1–G7), `Manifest copy
+identity in the wire format` (deferred protocol change, not a G stage).
+
+Goal: pay down the maintainability debt the review found — duplicated decode aggregation,
+unwired CLI surface, dead code, unused dependencies — **before the next protocol change**
+(the Phase 4 follow-up research in `docs/BACKLOG.md` is the natural next protocol work).
+Each stage is one commit = one ADR (flip its `Accepted` ADR to `Implemented` in the landing
+commit), with the full test suite green and Phase 1–4 behavior unchanged.
+
+### G1. Decode aggregation unification (R1; fixes F1+F2) — ADR `CR-20260913-03`
+
+- Extract an internal `DecodeAggregator` in `YTAHD.Core/Core` owning the duplicate-run
+  tracker, accumulator, packet list, and metrics; route the parallel path through it, then
+  the serial path, then delete the dead inline logic. `stopRequested` latch moves inside.
+- Equivalence proof: `DecoderStreamOrchestratorTests`, `DecodeSlotOrderingTests`,
+  `DurabilityMatrixTests`, `IntegrityEndToEndTests`, `ParallelPipelineRealCodecTests` stay
+  green **unchanged**; plus one `YTAHD.Perf bench` before/after run (≥ 1 MB payload,
+  durability on) recorded in the ADR as merge evidence.
+- Rollback: plain revert; no protocol or public-API change.
+
+### G2. Wire `--hwaccel` into decode (R2; fixes F5) — ADR `CR-20260913-04`
+
+- `DecodeOptions.HardwareAcceleration` (default `none`) flows to `DecoderEngine.DecodeAsync`,
+  which prepends `-hwaccel <value>` from `FFmpegEncoderArguments.HwaccelValue` before `-i`;
+  `none` emits nothing (byte-identical default arguments).
+- Tests: fake-wrapper argument assertions (`none` → no flag, `qsv`, `cuda`); one
+  probe-guarded real-FFmpeg `--hwaccel qsv` decode smoke test (pattern from
+  `QsvRealCodecTests`). Decode-side capability probing (`ffmpeg -hwaccels`) is a known gap —
+  small probe extension budgeted if qsv decode proves useful.
+
+### G3. Remove unused dependencies (R3; fixes F4) — ADR `TD-20260913-01`
+
+- Delete `SkiaSharp 2.88.9` + `MathNet.Numerics 4.15.0` from `YTAHD.Core.csproj` and the
+  dead `using SkiaSharp;` in `EncoderEngine.cs`. Proof: full build + full suite green.
+
+### G4. `DecodeThresholds` advisory verdict (R4; fixes F3) — ADR `CR-20260913-05`
+
+- Wire `DecodeThresholds.IsSatisfiedBy` into the CLI decode summary as an advisory
+  `quality=within-thresholds/degraded` line. Integrity (`integrity=`) stays the sole
+  acceptance gate — the verdict must never fail a decode. Extend `DecoderMetricsTests`.
+
+### G5. Packet buffer-length contract (R5; fixes F9) — ADR `CR-20260913-06`
+
+- `PseudoQamModulator.GetPacketBufferLength` returns `HeaderBytes + payloadBytesPerFrame`
+  (bytes, like its siblings) instead of `Math.Max(BitsPerFrame, HeaderBytes)`.
+- Add a cross-modulator regression test asserting
+  `GetPacketBufferLength == HeaderBytes + GetPayloadBytesPerFrame` for all four modulators;
+  verify `DecoderPacketCompatibilityTests` / `BinaryGridModulatorTests` stay green.
+
+### G6. Modulator-owned decoder resolution (R6a; fixes F11) — ADR `CR-20260913-07`
+
+- `IFrameBitDecoderProvider` capability interface on each modulator;
+  `FrameBitDecoderFactory` resolves via the capability (keeping decorator unwrapping), type
+  ladder becomes legacy fallback then is deleted. A modulator without a decoder fails at
+  registration, not at frame N of a decode.
+
+### G7. Cleanup batch (R6b; fixes F8, F10, F12, F13) — ADR `TD-20260913-02`
+
+- Single ffprobe resolution (`DecoderEngine` → `FFmpegProbe.ResolveFfprobePath`); cached
+  per-profile `MotionTileBasis` tables (`ConcurrentDictionary`, read-only, legacy consts
+  delegate to `MotionTileProfile.Default`); hoisted `NormalizeModulator` shared helper;
+  delete root `test-output.txt`. One batch commit, individually revertable items.
+
+### Explicit non-goals (per Review 1)
+
+- F6 manifest copy ordinal — wire-format change, tracked separately in `docs/BACKLOG.md`,
+  rides with the next protocol revision.
+- F7 streaming encode input — needs a design pass (manifest needs `dataFrameCount` before
+  emission); do not bundle with G1.
+- The 3× emission pattern, `AutoWorkerCap=4`, `System.CommandLine` beta, `DebugTrace`
+  logging — deliberately not flagged by the review; no ADR, no work.
+
+### Sequencing
+
+G3 → G2 → G4 → G5 → G7 are independent small steps (any order; G3 first as the cheapest
+warm-up). **G1 last of the majors** — it is the highest-risk extraction and benefits from
+the suite being otherwise untouched. G6 any time after G1. G1–G3 all land before the next
+protocol change; G4–G7 can follow at leisure.
+
+---
+
 ## Sequencing
 
 ```mermaid
@@ -446,6 +532,9 @@ graph LR
     C1 --> D1 --> D2 --> D3 --> D4 --> D5
     C1 --> E1 --> E2 --> E3 --> E4 --> E5
     C1 --> F1 --> F2 --> F3 --> F4 --> F5 --> F6
+    G3 --> G2 --> G4 --> G5 --> G7
+    G2 --> G1
+    G1 --> G6
 ```
 
 Recommended order for a single developer: A1→A2→A3 (pure library code, fast feedback),
