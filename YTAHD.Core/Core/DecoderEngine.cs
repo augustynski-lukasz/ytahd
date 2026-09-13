@@ -64,12 +64,8 @@ namespace YTAHD.Core.Core
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
         {
-            if (modulator is BinaryGridModulator binary && (binary.MacroblockWidth != macroblockSize || binary.MacroblockHeight != macroblockSize))
-            {
-                return new BinaryGridModulator(macroblockSize, macroblockSize);
-            }
-
-            return modulator ?? throw new ArgumentNullException(nameof(modulator));
+            // Shared helper (TD-20260913-02, F12): identical logic lived in both engines.
+            return ModulatorNormalizer.Normalize(modulator, macroblockSize);
         }
 
         public static int GetPayloadBytesPerFrame(int width, int height, int macroblockSize, int headerBytes)
@@ -177,28 +173,10 @@ namespace YTAHD.Core.Core
 
         private string ResolveFfprobeExecutablePath()
         {
-            if (string.IsNullOrWhiteSpace(_ffmpeg.ExecutablePath) || _ffmpeg.ExecutablePath.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
-            {
-                return "ffprobe";
-            }
-
-            var directory = Path.GetDirectoryName(_ffmpeg.ExecutablePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                var ffprobePath = Path.Combine(directory, "ffprobe.exe");
-                if (File.Exists(ffprobePath))
-                {
-                    return ffprobePath;
-                }
-
-                var ffprobeAltPath = Path.Combine(directory, "ffprobe");
-                if (File.Exists(ffprobeAltPath))
-                {
-                    return ffprobeAltPath;
-                }
-            }
-
-            return "ffprobe";
+            // Single source of truth (TD-20260913-02, F8): FFmpegProbe.ResolveFfprobePath
+            // already handles the explicit-path and PATH cases, including the
+            // CR-20260911-01 directory-override handling this private copy could miss.
+            return FFmpegProbe.ResolveFfprobePath(_ffmpeg.ExecutablePath) ?? "ffprobe";
         }
 
         private async Task<(int Width, int Height, int Fps)> GetVideoMetadataAsync(string inputVideo)

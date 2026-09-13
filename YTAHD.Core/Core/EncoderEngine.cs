@@ -65,12 +65,8 @@ namespace YTAHD.Core.Core
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
         {
-            if (modulator is BinaryGridModulator binary && (binary.MacroblockWidth != macroblockSize || binary.MacroblockHeight != macroblockSize))
-            {
-                return new BinaryGridModulator(macroblockSize, macroblockSize);
-            }
-
-            return modulator ?? throw new ArgumentNullException(nameof(modulator));
+            // Shared helper (TD-20260913-02, F12): identical logic lived in both engines.
+            return ModulatorNormalizer.Normalize(modulator, macroblockSize);
         }
 
         public static byte[] CreateDataFramePacket(int frameIndex, int totalDataFrames, int groupStart, int groupCount, int payloadLength, ReadOnlySpan<byte> payload, int payloadCapacity = 0)

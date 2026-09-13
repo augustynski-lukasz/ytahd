@@ -23,6 +23,25 @@ namespace YTAHD.Core.Core
             => IsCanonicalFrame(frame.Span, width, height, borderWidth);
     }
 
+    /// <summary>
+    /// Shared modulator normalization (TD-20260913-02, F12): a <see cref="BinaryGridModulator"/>
+    /// constructed with a macroblock size that disagrees with the pipeline's is replaced by one
+    /// matching it, so both engines see the same geometry. Hoisted here from identical private
+    /// copies in <c>EncoderEngine</c> and <c>DecoderEngine</c>.
+    /// </summary>
+    internal static class ModulatorNormalizer
+    {
+        internal static IModulator Normalize(IModulator? modulator, int macroblockSize)
+        {
+            if (modulator is BinaryGridModulator binary && (binary.MacroblockWidth != macroblockSize || binary.MacroblockHeight != macroblockSize))
+            {
+                return new BinaryGridModulator(macroblockSize, macroblockSize);
+            }
+
+            return modulator ?? throw new ArgumentNullException(nameof(modulator));
+        }
+    }
+
     public static class FrameBitDecoderFactory
     {
         /// <summary>

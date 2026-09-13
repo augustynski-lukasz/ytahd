@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 
 namespace YTAHD.Core.Modulation
 {
@@ -20,10 +21,17 @@ namespace YTAHD.Core.Modulation
 
         // Per-axis code → signed pixel offset. 16 distinct non-zero even values, so an axis
         // offset is never 0 and the combined (dx, dy) can never collide with the canonical marker.
-        private static readonly int[] OffsetTable = BuildOffsetTable(MotionTileProfile.Default);
+        // Cached per profile (TD-20260913-02, F10): the tables are pure functions of the profile,
+        // so rebuilding them per frame/cell-search on the Phase 4 hot path was pure waste. The
+        // cached arrays are treated as read-only by every consumer; the public getters clone.
+        private static readonly ConcurrentDictionary<MotionTileProfile, int[]> OffsetTableCache = new();
+        private static readonly ConcurrentDictionary<MotionTileProfile, byte[,]> TextureCache = new();
+
+        private static int[] GetOffsetTable(MotionTileProfile profile)
+            => OffsetTableCache.GetOrAdd(profile, BuildOffsetTable);
 
         /// <summary>Deterministic reference tile texture (band-limited, centered on 128).</summary>
-        public static readonly byte[,] Texture = BuildTexture(MotionTileProfile.Default);
+        public static readonly byte[,] Texture = GetTexture(MotionTileProfile.Default);
 
         private static int[] BuildOffsetTable(MotionTileProfile profile)
         {
@@ -42,7 +50,7 @@ namespace YTAHD.Core.Modulation
         public static int GetOffsetForAxisCode(int code)
         {
             if (code < 0 || code >= OffsetLevelsPerAxis) throw new ArgumentOutOfRangeException(nameof(code));
-            return OffsetTable[code];
+            return GetOffsetTable(MotionTileProfile.Default)[code];
         }
 
         public static bool TryGetAxisCodeForOffset(int offsetPx, out int code)
@@ -50,7 +58,7 @@ namespace YTAHD.Core.Modulation
 
         public static bool TryGetAxisCodeForOffset(MotionTileProfile profile, int offsetPx, out int code)
         {
-            int[] table = BuildOffsetTable(profile);
+            int[] table = GetOffsetTable(profile);
             for (int c = 0; c < profile.OffsetLevelsPerAxis; c++)
             {
                 if (table[c] == offsetPx)
@@ -65,13 +73,13 @@ namespace YTAHD.Core.Modulation
         }
 
         /// <summary>Returns every valid signed pixel offset an axis can take (never 0).</summary>
-        public static int[] GetAxisOffsets() => (int[])OffsetTable.Clone();
+        public static int[] GetAxisOffsets() => (int[])GetOffsetTable(MotionTileProfile.Default).Clone();
 
         /// <summary>Returns every valid signed pixel offset for the given profile (never 0).</summary>
-        public static int[] GetAxisOffsets(MotionTileProfile profile) => BuildOffsetTable(profile);
+        public static int[] GetAxisOffsets(MotionTileProfile profile) => (int[])GetOffsetTable(profile).Clone();
 
         /// <summary>Returns the deterministic reference texture for the given profile.</summary>
-        public static byte[,] GetTexture(MotionTileProfile profile) => BuildTexture(profile);
+        public static byte[,] GetTexture(MotionTileProfile profile) => TextureCache.GetOrAdd(profile, BuildTexture);
 
         /// <summary>True only for the reserved canonical/no-data marker, never for a valid alphabet symbol.</summary>
         public static bool IsCanonicalOffset(int dx, int dy) => dx == 0 && dy == 0;
@@ -82,7 +90,7 @@ namespace YTAHD.Core.Modulation
 
         public static (int Dx, int Dy) EncodeOffset(MotionTileProfile profile, byte value)
         {
-            int[] table = BuildOffsetTable(profile);
+            int[] table = GetOffsetTable(profile);
             int dxCode = (value >> 4) & 0xF;
             int dyCode = value & 0xF;
             return (table[dxCode], table[dyCode]);

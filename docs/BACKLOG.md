@@ -2,24 +2,6 @@
 
 Open items only. When an item is resolved, delete it from here and add an ADR in `docs/decisions/`.
 
-## Refactoring plan from `docs/REVIEW.md` Review 1 (2026-09-13)
-
-Design ADRs are already `Accepted` in `docs/decisions/`; each item = one commit = one ADR
-(flip its ADR to `Implemented` in the landing commit). Order and rationale in
-`docs/PLAN.md` Workstream G. G1–G3 should land **before the next protocol change** (the
-Phase 4 follow-up research below is the natural next protocol work).
-
-- **G2 — Wire `--hwaccel` into decode (R2; fixes F5).** Thread
-  `DecodeOptions.HardwareAcceleration` into `DecoderEngine` args via
-  `FFmpegEncoderArguments.HwaccelValue`; default `none` emits nothing. ADR
-  `CR-20260913-04-decode-hwaccel-wiring.md`.
-- **G3 — Remove unused dependencies (R3; fixes F4).** Drop `SkiaSharp` + `MathNet.Numerics`
-  from `YTAHD.Core.csproj` and the dead `using SkiaSharp;`. ADR
-  `TD-20260913-01-remove-unused-dependencies.md`.
-- **G7 — Cleanup batch (R6b; fixes F8, F10, F12, F13).** Single ffprobe resolution, cached
-  per-profile tile tables, hoisted `NormalizeModulator`, delete `test-output.txt`. ADR
-  `TD-20260913-02-review-cleanup-batch.md`.
-
 ## Manifest copy identity in the wire format (deferred protocol change)
 
 From Review 1 finding F6: manifest chunk reassembly in

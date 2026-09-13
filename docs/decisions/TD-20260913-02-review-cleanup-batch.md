@@ -1,6 +1,6 @@
 # TD-20260913-02 — Review cleanup batch (ffprobe resolution, tile-basis cache, NormalizeModulator, test-output.txt)
 
-**Date:** 2026-09-13 **Status:** Accepted
+**Date:** 2026-09-13 **Status:** Implemented
 **Area:** `YTAHD.Core/Core` (`DecoderEngine`, `EncoderEngine`),
 `YTAHD.Core/Modulation/MotionTileBasis.cs`, repo root
 
@@ -44,3 +44,15 @@ the ffprobe consolidation.
 - No protocol, wire-format, or public-API change; rollback is a plain revert.
 - The tile-basis cache is the only behavioral-risk item (shared mutable state); mitigated by
   exposing the cached tables as read-only and the existing determinism tests.
+
+## Validation
+
+- ADR-named suites green: `MotionVectorModulatorTests`, `MotionFrameBitDecoderTests`,
+  `FFmpegCapabilitiesTests`, `Phase4TileSizeSweepTests` (33/33 focused) — tile-table
+  determinism unchanged under the cache.
+- Full suite: 331/331 passed in 1 m 08 s.
+- Implementation notes: `test-output.txt` was never git-tracked (already ignored), so F13
+  was a disk deletion only. The cached tables are exposed only through cloning getters
+  (`GetAxisOffsets`) or as the shared read-only `Texture` array, preserving the
+  determinism contract; `GetTexture(profile)` returns the cached array by reference —
+  consumers treat it as read-only, matching the pre-existing `Texture` static's contract.
