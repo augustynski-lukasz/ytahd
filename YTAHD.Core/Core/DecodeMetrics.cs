@@ -44,6 +44,12 @@ namespace YTAHD.Core.Core
 
         /// <summary>The stream manifest recovered from intact manifest frames, if any.</summary>
         public StreamManifest? Manifest { get; set; }
+
+        /// <summary>
+        /// Parity-group ids that could not be reconstructed (whole-group losses, CR-20260913-02).
+        /// Empty when every group recovered; non-empty implies <see cref="IntegrityStatus"/> Failed.
+        /// </summary>
+        public IReadOnlyList<int> MissingDatagramIds { get; set; } = Array.Empty<int>();
         /// True when the audio clock indicates more datagrams were sent than the video
         /// pipeline could reconstruct (beyond a small tolerance for detector/AAC noise) —
         /// e.g. a whole parity group silently dropped, which XOR-parity alone cannot detect

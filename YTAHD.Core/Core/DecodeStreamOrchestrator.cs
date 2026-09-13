@@ -145,7 +145,10 @@ namespace YTAHD.Core.Core
                     throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
                 }
 
-                if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest))
+                // Hole-tolerant reconstruction (CR-20260913-02): a wholly-missing parity group
+                // becomes a zero-filled hole plus a loss-map entry instead of aborting the
+                // decode. Integrity verification below still fails loudly for any hole.
+                if (!durabilityCodec.TryDecodeFramePacketsWithHoles(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest, out var missingGroupIds))
                 {
                     throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
                 }
@@ -165,7 +168,8 @@ namespace YTAHD.Core.Core
                     FrameReadMilliseconds = frameReadMilliseconds,
                     PacketDecodeMilliseconds = packetDecodeMilliseconds,
                     AggregationMilliseconds = aggregationMilliseconds,
-                    Manifest = manifest
+                    Manifest = manifest,
+                    MissingDatagramIds = missingGroupIds
                 };
                 serialMetrics.IntegrityStatus = VerifyAgainstManifest(payload, manifest, serialMetrics);
                 LastDecodeMetrics = serialMetrics;
@@ -525,14 +529,14 @@ namespace YTAHD.Core.Core
                         if (recoveredLength <= 0)
                             throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
 
-                        // A recovered stream manifest is authoritative: its declared total payload
-                        // bytes replaces the sum-of-declared-lengths heuristic, which trusts
-                        // per-frame length fields that may themselves be corrupt
-                        // (CR-20260912-05 stage 3).
-                        if (!durabilityCodec.TryDecodeFramePackets(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest))
+                        // Hole-tolerant reconstruction (CR-20260913-02): a wholly-missing parity
+                        // group becomes a zero-filled hole plus a loss-map entry instead of
+                        // aborting the decode. Integrity verification below still fails loudly.
+                        if (!durabilityCodec.TryDecodeFramePacketsWithHoles(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest, out var missingGroupIds))
                             throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
 
                         metrics.Manifest = manifest;
+                        metrics.MissingDatagramIds = missingGroupIds;
                         metrics.IntegrityStatus = VerifyAgainstManifest(payload, manifest, metrics);
                         if (metrics.IntegrityStatus == IntegrityStatus.Failed)
                         {

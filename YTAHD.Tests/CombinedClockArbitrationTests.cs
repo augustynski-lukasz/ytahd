@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Xunit;
+using YTAHD.Core.Application;
 using YTAHD.Core.Core;
 using YTAHD.Core.Modulation;
 
@@ -28,7 +29,14 @@ namespace YTAHD.Tests
             return mod.GetPayloadBytesPerFrame(Width, Height, HeaderBytes, borderWidth: 0, macroblockSize: mod.MacroblockWidth);
         }
 
-        private static async Task<MemoryStream> EncodeExactlyTwoParityGroupsAsync()
+        private static DurabilityMatrixOptions MatrixOptions() => new()
+        {
+            SymbolSize = 32,
+            GroupSize = 4,
+            ParitySymbolsPerGroup = 1
+        };
+
+        private static async Task<MemoryStream> EncodeExactlyTwoParityGroupsAsync(bool useDurabilityMatrix = false)
         {
             int payloadBytesPerFrame = GetPayloadBytesPerFrame();
             var payload = new byte[payloadBytesPerFrame * 8]; // 8 data frames = exactly 2 full groups of 4
@@ -39,7 +47,15 @@ namespace YTAHD.Tests
             try
             {
                 var fake = new FakeFFmpegWrapper(Width, Height, 30);
-                var encoder = new EncoderEngine(new BinaryGridModulator(), fake, Macroblock, Width, Height, 30);
+                var encoder = new EncoderEngine(new BinaryGridModulator(), fake, new VideoCodecOptions
+                {
+                    Width = Width,
+                    Height = Height,
+                    MacroblockSize = Macroblock,
+                    Fps = 30,
+                    UseDurabilityMatrix = useDurabilityMatrix,
+                    DurabilityMatrixOptions = MatrixOptions()
+                });
                 await encoder.EncodeAsync(tmpIn, "out.mp4");
 
                 var buffer = fake.Process!.Buffer;
@@ -107,6 +123,59 @@ namespace YTAHD.Tests
 
             Assert.Null(orchestrator.LastDecodeMetrics.AudioDatagramCount);
             Assert.Null(orchestrator.LastDecodeMetrics.HasAudioVideoDatagramMismatch());
+        }
+
+        // ── CR-20260913-02: hole-tolerant multi-erasure repair ──────────────────────
+
+        [Fact]
+        public async Task SilentlyDropped_WholeParityGroup_Yields_Documented_Hole_And_Loss_Map()
+        {
+            // Encoded with the durability matrix so the stream carries the manifest schedule
+            // the hole-tolerant decoder needs; the redundant start manifest survives truncation.
+            // Under the matrix the payload (8 frames' worth) becomes many small symbol groups,
+            // so the "dropped parity group" is the stream's FINAL group, not group 1.
+            var matrixOptions = MatrixOptions();
+            var buffer = await EncodeExactlyTwoParityGroupsAsync(useDurabilityMatrix: true);
+
+            int payloadBytesPerFrame = GetPayloadBytesPerFrame();
+            int totalPayloadBytes = payloadBytesPerFrame * 8;
+            int groupBytes = matrixOptions.GroupSize * matrixOptions.SymbolSize;
+            int lastGroupIndex = (int)Math.Ceiling(totalPayloadBytes / (double)groupBytes) - 1;
+            int symbolsInLastGroup = (int)Math.Ceiling((totalPayloadBytes - lastGroupIndex * groupBytes) / (double)matrixOptions.SymbolSize);
+
+            int frameVideoBytes = Width * Height * 3;
+            // Strip the final group entirely: its data frames + its parity frame + the
+            // end-manifest copy, each written PhysicalFramesPerLogicalFrame times.
+            int logicalFramesAtTail = symbolsInLastGroup + 1 /* parity */ + 1 /* end manifest */;
+            int physicalFramesToDrop = logicalFramesAtTail * PhysicalFramesPerLogicalFrame;
+            int bytesToDrop = physicalFramesToDrop * frameVideoBytes;
+            var truncated = new MemoryStream(buffer.ToArray(), 0, (int)buffer.Length - bytesToDrop, writable: false);
+
+            const int trueLogicalFrameCount = 10; // what the (unaffected) audio track would report
+
+            // Durability-matrix decode path (the legacy path has no schedule to size holes).
+            var orchestrator = new DecodeStreamOrchestrator(
+                new BinaryGridModulator(), Width, Height, Macroblock,
+                useDurabilityMatrix: true,
+                matrixOptions);
+            var output = await orchestrator.ProcessAsync(truncated, expectedOutputBytes: 0, audioDatagramCount: trueLogicalFrameCount);
+
+            var metrics = orchestrator.LastDecodeMetrics;
+            Assert.True(metrics.HasAudioVideoDatagramMismatch(), "Expected the audio clock to flag the silently dropped parity group.");
+
+            // Loss map: exactly the final group, identified precisely for the consumer.
+            Assert.Single(metrics.MissingDatagramIds);
+            Assert.Equal(lastGroupIndex, metrics.MissingDatagramIds[0]);
+
+            // Output still spans the manifest-declared schedule; hole bytes are zeros and
+            // everything before the hole is intact.
+            Assert.Equal(totalPayloadBytes, output.Length);
+            int holeStart = lastGroupIndex * groupBytes;
+            Assert.All(output[holeStart..], b => Assert.Equal(0, b));
+
+            var original = new byte[totalPayloadBytes];
+            new Random(99).NextBytes(original);
+            Assert.Equal(original[..holeStart], output[..holeStart]);
         }
     }
 }

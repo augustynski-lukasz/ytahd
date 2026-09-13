@@ -231,6 +231,125 @@ public sealed class DurabilityTransportCodec
     }
 
     /// <summary>
+    /// Hole-tolerant frame-packet decode (CR-20260913-02): like <see cref="TryDecodeFramePackets"/>
+    /// but a wholly-missing parity group becomes a zero-filled hole instead of failing the decode.
+    /// Manifest reconciliation is unchanged (conflicting manifests still fail). Callers must treat
+    /// a non-empty <paramref name="missingGroupIds"/> as failed integrity.
+    /// </summary>
+    public bool TryDecodeFramePacketsWithHoles(IEnumerable<byte[]> packets, int expectedLength, out byte[] payload, out int recoveredBytes, out StreamManifest? manifest, out IReadOnlyList<int> missingGroupIds)
+    {
+        payload = Array.Empty<byte>();
+        recoveredBytes = 0;
+        manifest = null;
+        missingGroupIds = Array.Empty<int>();
+
+        var bestSymbolsByKey = CollectSymbols(packets, out var manifests);
+        if (!ReconcileManifests(manifests, out manifest))
+        {
+            return false;
+        }
+
+        var codec = new DurabilityMatrixCodec(_options);
+
+        // A recovered manifest is authoritative for the schedule length (CR-20260913-02):
+        // sizing holes from the sum of recovered per-frame lengths would truncate the output
+        // at the hole boundary instead of spanning the missing groups.
+        int scheduleLength = manifest is not null ? (int)Math.Min(int.MaxValue, manifest.TotalPayloadBytes) : expectedLength;
+        return codec.TryDecodeWithHoles(bestSymbolsByKey.Values, scheduleLength, out payload, out recoveredBytes, out missingGroupIds);
+    }
+
+    /// <summary>
+    /// Shared packet-walk for the strict and hole-tolerant decodes: converts frame packets into
+    /// the best symbol per (group, symbol, parity) key and collects manifest chunks.
+    /// </summary>
+    private Dictionary<(int GroupId, int SymbolId, bool IsParity), DurabilitySymbol> CollectSymbols(IEnumerable<byte[]> packets, out List<StreamManifest> manifests)
+    {
+        var bestSymbolsByKey = new Dictionary<(int GroupId, int SymbolId, bool IsParity), DurabilitySymbol>();
+        manifests = new List<StreamManifest>();
+        var manifestChunks = new Dictionary<bool, Dictionary<int, byte[]>>();
+        bool seenSymbolFrame = false;
+        foreach (var packet in packets)
+        {
+            if (packet is null || packet.Length < FramePacket.HeaderBytes)
+            {
+                continue;
+            }
+
+            if (!FramePacketCodec.TryDecode(packet, out var frameType, out var frameIndex, out var totalDataFrames, out var groupStart, out var groupCount, out var payloadLength, out var payloadBytes))
+            {
+                continue;
+            }
+
+            DurabilitySymbol symbol;
+            if (frameType == FramePacket.FrameTypeData)
+            {
+                var groupId = (groupStart / _options.GroupSize);
+                var symbolId = Math.Max(0, frameIndex - groupStart);
+                symbol = new DurabilitySymbol(groupId, symbolId, false, payloadBytes)
+                {
+                    SourceLength = payloadLength,
+                    GroupCount = groupCount,
+                    RedundancyLevel = 1,
+                    Hash = SHA256.HashData(payloadBytes)
+                };
+            }
+            else if (frameType == FramePacket.FrameTypeParity)
+            {
+                var groupId = groupStart / Math.Max(1, _options.GroupSize);
+                symbol = new DurabilitySymbol(groupId, _options.GroupSize, true, payloadBytes)
+                {
+                    SourceLength = payloadLength,
+                    GroupCount = groupCount,
+                    RedundancyLevel = 1,
+                    Hash = SHA256.HashData(payloadBytes)
+                };
+            }
+            else
+            {
+                if (frameType != FramePacket.FrameTypeManifest)
+                {
+                    continue; // unknown frame type: not a symbol, not a manifest
+                }
+
+                // Manifest frames are not durability symbols. A manifest body larger than one
+                // frame's payload capacity (e.g. phase4's 88-byte frames) is split into chunks;
+                // chunk index/count ride in the otherwise-unused frameIndex/groupCount header
+                // fields. The start and end copies must be reassembled separately so a
+                // conflicting end copy is still detected by the reconciliation below instead of
+                // being deduplicated away (CR-20260912-05 stage 3 + phase4 chunking fix).
+                // Packets arrive in stream order: manifest frames seen before any data/parity
+                // frame belong to the start copy, everything after to the end copy.
+                var copyKey = !seenSymbolFrame;
+                if (!manifestChunks.TryGetValue(copyKey, out var chunkList))
+                {
+                    chunkList = new Dictionary<int, byte[]>();
+                    manifestChunks[copyKey] = chunkList;
+                }
+
+                chunkList.TryAdd(frameIndex, payloadBytes);
+                continue;
+            }
+
+            seenSymbolFrame = true;
+
+            var key = (symbol.GroupId, symbol.SymbolId, symbol.IsParity);
+            if (!bestSymbolsByKey.TryGetValue(key, out var existing) || symbol.GetQualityScore() > existing.GetQualityScore())
+            {
+                bestSymbolsByKey[key] = symbol;
+            }
+        }
+
+        foreach (var chunkList in manifestChunks.Values)
+        {
+            // Reassemble every copy: a conflicting copy must reach the reconciliation below so
+            // the decode fails loudly instead of silently picking the start copy.
+            TryReassembleManifestChunks(chunkList, manifests);
+        }
+
+        return bestSymbolsByKey;
+    }
+
+    /// <summary>
     /// Reassembles one copy's manifest chunk frames: concatenates chunks in contiguous index
     /// order starting at 0 and deserializes the body. Returns true when a valid manifest was
     /// recovered; a gap (both copies corrupt for the same chunk) simply yields false and the

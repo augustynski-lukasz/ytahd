@@ -163,6 +163,79 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
         return payload.Length == expectedLength;
     }
 
+    /// <summary>
+    /// Hole-tolerant decode (CR-20260913-02): recovers each parity group independently.
+    /// A group whose symbols and parity are both absent (or whose loss count exceeds the
+    /// parity budget) becomes a zero-filled hole instead of aborting the whole decode.
+    /// Returns true when reconstruction produced the expected length — even with holes —
+    /// and reports the group ids that could not be recovered. Callers must treat a
+    /// non-empty hole map as failed integrity (the output is not byte-faithful).
+    /// </summary>
+    public bool TryDecodeWithHoles(IEnumerable<DurabilitySymbol> symbols, int expectedLength, out byte[] payload, out int recoveredBytes, out IReadOnlyList<int> missingGroupIds)
+    {
+        payload = Array.Empty<byte>();
+        recoveredBytes = 0;
+        missingGroupIds = Array.Empty<int>();
+
+        if (symbols is null)
+        {
+            throw new ArgumentNullException(nameof(symbols));
+        }
+
+        if (expectedLength < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(expectedLength));
+        }
+
+        var validSymbols = DurabilityRecoveryPolicy.SelectBestSubset(symbols, _options)
+            .GroupBy(s => (s.GroupId, s.SymbolId, s.IsParity))
+            .Select(g => g.OrderByDescending(s => s.GetQualityScore()).First())
+            .ToList();
+
+        // The expected schedule covers the whole declared length, so leading, interior, and
+        // trailing losses all fall out of one uniform iteration (CR-20260913-02).
+        int groupsCovered = (int)Math.Ceiling(expectedLength / (double)(_options.GroupSize * _options.SymbolSize));
+        var groupsById = validSymbols
+            .GroupBy(s => s.GroupId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var reconstructed = new List<byte>();
+        var holes = new List<int>();
+        var symbolSize = _options.SymbolSize;
+
+        for (int groupId = 0; groupId < groupsCovered; groupId++)
+        {
+            if (!groupsById.TryGetValue(groupId, out var group) ||
+                !TryRecoverGroup(group, out var recoveredGroupSymbols))
+            {
+                // Group entirely absent (nothing arrived) or unreconstructable: zero-filled
+                // hole sized from the schedule. Hash verification fails loudly downstream.
+                holes.Add(groupId);
+                reconstructed.AddRange(new byte[_options.GroupSize * symbolSize]);
+                continue;
+            }
+
+            foreach (var symbol in recoveredGroupSymbols.OrderBy(s => s.SymbolId))
+            {
+                reconstructed.AddRange(symbol.Data);
+            }
+        }
+
+        missingGroupIds = holes;
+
+        payload = reconstructed.Take(expectedLength).ToArray();
+        if (payload.Length < expectedLength)
+        {
+            // The schedule may overshoot the declared length at the tail; trim exactly.
+            var trimmed = new byte[expectedLength];
+            Buffer.BlockCopy(payload, 0, trimmed, 0, payload.Length);
+            payload = trimmed;
+        }
+
+        recoveredBytes = payload.Length;
+        return true;
+    }
+
     public bool TryDecodePackets(IEnumerable<DurabilityPacket> packets, int expectedLength, out byte[] payload, out int recoveredBytes)
     {
         if (packets is null)
@@ -220,12 +293,22 @@ public sealed class DurabilityMatrixCodec : IDataDurabilityCodec
 
         // The group's real size comes from the packet metadata when available. The parity
         // symbol's id is the full GroupSize even for a partial final group, so falling back to
-        // it would count never-existing symbols as losses and fail every short payload.
+        // it would count never-existing symbols as losses and fail every short payload. Data
+        // symbols carry the same GroupCount header, so they must be consulted too: without
+        // parity there is otherwise no authoritative group size and a partial group would be
+        // silently truncated instead of reported as a hole (CR-20260913-02).
+        var declaredGroupCounts = deduplicated
+            .Where(s => !s.IsParity)
+            .Select(s => s.GroupCount)
+            .Where(c => c > 0)
+            .ToList();
         var expectedSourceCount = paritySymbols.Count > 0
             ? (paritySymbols[0].GroupCount > 0
                 ? paritySymbols[0].GroupCount
                 : Math.Max(1, paritySymbols[0].SymbolId))
-            : (actualSourceIds.Count > 0 ? actualSourceIds.Max() + 1 : 0);
+            : declaredGroupCounts.Count > 0
+                ? declaredGroupCounts.Max()
+                : (actualSourceIds.Count > 0 ? actualSourceIds.Max() + 1 : 0);
 
         var missingSourceIds = Enumerable.Range(0, expectedSourceCount)
             .Where(i => !actualSourceIds.Contains(i))

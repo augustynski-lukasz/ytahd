@@ -10,16 +10,6 @@ configuration analysed for Phase 4), sub-pixel offset alphabet (½-px steps via 
 correlation), delta-chained offsets (previous-frame-relative, 1-frame lifespan). Stage C1
 (combined clock arbitration) has landed; not started.
 
-## Combined clock: multi-frame-loss repair (follow-up)
-
-Stage C1 (clock arbitration) is implemented: `DecodeMetrics.HasAudioVideoDatagramMismatch()`
-detects when the audio FSK clock's datagram count disagrees with what the video pipeline
-actually reconstructed (e.g. a whole parity group silently dropped, which XOR-parity alone
-cannot catch) — see ADR `F-20260903-02-audio-fsk-clock-design.md`. This is detection only.
-Actually _repairing_ such a loss — most plausibly by wiring the standalone durability-matrix
-codec in as a stronger multi-erasure repair path once a mismatch is flagged — is a deeper
-integration, deferred and not yet started.
-
 ## Phase 4 / audio FSK cadence conflict (follow-up)
 
 Confirmed during audio FSK validation: Phase 4's 2-physical-frame-per-datagram cadence (see

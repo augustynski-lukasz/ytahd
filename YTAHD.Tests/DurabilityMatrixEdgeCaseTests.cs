@@ -139,4 +139,87 @@ public class DurabilityMatrixEdgeCaseTests
 
         Assert.Equal(1, DurabilityRecoveryPolicy.ResolveMinimumRequiredSymbols(zeroOptions));
     }
+
+    // ── CR-20260913-02: hole-tolerant multi-erasure repair ──────────────────────
+
+    [Fact]
+    public void TryDecodeWithHoles_RecoversIntactGroups_AroundAWholeMissingGroup()
+    {
+        var options = new DurabilityMatrixOptions
+        {
+            SymbolSize = 32,
+            GroupSize = 4,
+            ParitySymbolsPerGroup = 1
+        };
+
+        var codec = new DurabilityMatrixCodec(options);
+        // 3 full groups of 4 symbols = 384 bytes.
+        var payload = Enumerable.Range(0, 384).Select(i => (byte)((i * 13) % 251)).ToArray();
+
+        var encoded = codec.Encode(payload);
+
+        // Drop group 1 entirely (data AND parity): 5 symbols gone.
+        var received = encoded.Symbols.Where(s => s.GroupId != 1).ToList();
+
+        var ok = codec.TryDecodeWithHoles(received, payload.Length, out var decoded, out _, out var missingGroups);
+
+        Assert.True(ok, "Intact groups must reconstruct even when one whole group is missing.");
+        Assert.Single(missingGroups);
+        Assert.Equal(1, missingGroups[0]);
+        Assert.Equal(payload.Length, decoded.Length);
+        // Hole content is zero-filled; everything outside the hole matches the original.
+        // Each group spans 4 symbols x 32 bytes = 128 bytes, so the hole is bytes 128..255.
+        for (int i = 0; i < payload.Length; i++)
+        {
+            byte expected = (i / 128) == 1 ? (byte)0 : payload[i];
+            Assert.Equal(expected, decoded[i]);
+        }
+    }
+
+    [Fact]
+    public void TryDecodeWithHoles_Reports_MultipleMissingGroups_AndPadsTail()
+    {
+        var options = new DurabilityMatrixOptions
+        {
+            SymbolSize = 32,
+            GroupSize = 4,
+            ParitySymbolsPerGroup = 1
+        };
+
+        var codec = new DurabilityMatrixCodec(options);
+        // 4 full groups of 4 symbols = 512 bytes.
+        var payload = Enumerable.Range(0, 512).Select(i => (byte)((i * 5) % 251)).ToArray();
+
+        var encoded = codec.Encode(payload);
+
+        // Drop groups 0 and 2 entirely.
+        var received = encoded.Symbols.Where(s => s.GroupId != 0 && s.GroupId != 2).ToList();
+
+        var ok = codec.TryDecodeWithHoles(received, payload.Length, out _, out _, out var missingGroups);
+
+        Assert.True(ok);
+        Assert.Equal(new[] { 0, 2 }, missingGroups);
+    }
+
+    [Fact]
+    public void TryDecodeWithHoles_AllSymbolsLost_ReportsEverythingMissing()
+    {
+        var options = new DurabilityMatrixOptions
+        {
+            SymbolSize = 32,
+            GroupSize = 4,
+            ParitySymbolsPerGroup = 1
+        };
+
+        var codec = new DurabilityMatrixCodec(options);
+        // 128 bytes = 4 symbols x 32 = exactly one full group.
+        var payload = new byte[128];
+
+        var ok = codec.TryDecodeWithHoles(Array.Empty<DurabilitySymbol>(), payload.Length, out var decoded, out _, out var missingGroups);
+
+        Assert.True(ok, "An all-holes decode must still report the loss map rather than throw.");
+        Assert.Single(missingGroups);
+        Assert.Equal(0, missingGroups[0]);
+        Assert.All(decoded, b => Assert.Equal(0, b));
+    }
 }
