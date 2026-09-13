@@ -47,7 +47,10 @@ namespace YTAHD.Core.Infrastructure
                         CreateNoWindow = true,
                         UseShellExecute = false,
                         RedirectStandardOutput = true,
-                        RedirectStandardError = true
+                        RedirectStandardError = true,
+                        // CR-20260913-08: ffprobe has no -nostdin option; the inherited
+                        // never-closing stdin under a host must be redirected and closed.
+                        RedirectStandardInput = true
                     };
 
                     using var child = ChildProcessScope.Start(psi, "Failed to start ffprobe.");
@@ -166,7 +169,9 @@ namespace YTAHD.Core.Infrastructure
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                // CR-20260913-08: ffprobe has no -nostdin option; redirect and close stdin.
+                RedirectStandardInput = true
             };
 
             try

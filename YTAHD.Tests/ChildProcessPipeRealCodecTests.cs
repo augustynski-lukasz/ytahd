@@ -229,13 +229,14 @@ namespace YTAHD.Tests
         private static ProcessStartInfo BuildRawVideoTranscodeStartInfo(string ffmpegPath, string inputFile)
             => new(
                 ffmpegPath,
-                $"-hide_banner -loglevel error -f rawvideo -pix_fmt rgb24 -s {PipeFrameWidth}x{PipeFrameHeight} " +
+                $"-nostdin -hide_banner -loglevel error -f rawvideo -pix_fmt rgb24 -s {PipeFrameWidth}x{PipeFrameHeight} " +
                 $"-r 30 -i \"{inputFile}\" -f rawvideo -pix_fmt rgb24 -")
             {
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                RedirectStandardInput = true
             };
 
         private static byte[] CreateRawVideoFramePattern(int frameCount, int frameBytes)

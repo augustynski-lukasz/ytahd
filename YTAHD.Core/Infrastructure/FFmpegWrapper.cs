@@ -79,6 +79,9 @@ namespace YTAHD.Core.Infrastructure
             // custom binary frame protocol and decoder tolerance; the real FFmpeg layer only needs a valid
             // codec/container pair so the encoded stream can be decoded back for end-to-end validation.
             // Encoder-specific flags come from the owned abstraction (CR-20260912-06 stage 2).
+            // -nostdin (CR-20260913-08): ffmpeg monitors stdin for interactive commands even when the
+            // raw frames arrive on it; a host whose stdin pipe never closes (test host, service) can
+            // otherwise leave the child waiting for interactive input after the frame stream ends.
             string encoderArgs = FFmpegEncoderArguments.For(_videoEncoder);
             string args;
             if (!string.IsNullOrWhiteSpace(audioPcmFilePath))
@@ -89,13 +92,13 @@ namespace YTAHD.Core.Infrastructure
                 // in case audio/video duration rounding differs by a fraction of a frame.
                 // -strict -2 is required by some older ffmpeg builds where the native AAC
                 // encoder is still marked experimental.
-                args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - " +
+                args = $"-nostdin -y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - " +
                        $"-f s16le -ar {AudioSampleRate} -ac 1 -i \"{audioPcmFilePath}\" " +
                        $"{encoderArgs} -c:a aac -strict -2 -shortest \"{outputPath}\"";
             }
             else
             {
-                args = $"-y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - {encoderArgs} -an \"{outputPath}\"";
+                args = $"-nostdin -y -f rawvideo -pix_fmt rgb24 -s {_width}x{_height} -r {_fps} -i - {encoderArgs} -an \"{outputPath}\"";
             }
 
             var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)
@@ -126,17 +129,23 @@ namespace YTAHD.Core.Infrastructure
 
             try
             {
-                var args = $"-v error -i \"{inputVideo}\" -vn -f s16le -ar {AudioSampleRate} -ac 1 -";
+                var args = $"-nostdin -v error -i \"{inputVideo}\" -vn -f s16le -ar {AudioSampleRate} -ac 1 -";
                 var psi = new ProcessStartInfo(_ffmpegExecutablePath, args)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    // CR-20260913-08: -nostdin alone does not neutralize an inherited never-closing
+                    // stdin under a host; the pipe must be explicitly redirected (and closed).
+                    RedirectStandardInput = true
                 };
 
                 using var child = ChildProcessScope.Start(psi, "Failed to start ffmpeg.");
                 var process = child.Process;
+                // Close the redirected stdin immediately: nothing is ever written to it, and an
+                // open stdin pipe keeps ffmpeg's interactive-command monitor alive (CR-20260913-08).
+                process.StandardInput.Close();
 
                 // The pipe is pumped on a dedicated thread; reading it from the pool would park a
                 // pool thread for the whole duration of the extraction.

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 using YTAHD.Core.Core;
+using YTAHD.Core.Infrastructure;
 using YTAHD.Core.Modulation;
 
 namespace YTAHD.Tests
@@ -15,7 +16,7 @@ namespace YTAHD.Tests
         private static string? GetAvailableFfmpegPath() => TestFfmpeg.GetAvailableFfmpegPath();
 
         [Fact]
-        public void BinaryGridFrameBitDecoder_Parses_Valid_Header_From_Real_Libx264_Frame()
+        public async Task BinaryGridFrameBitDecoder_Parses_Valid_Header_From_Real_Libx264_Frame()
         {
             var ffmpegPath = GetAvailableFfmpegPath();
             Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be available for the real codec integration test.");
@@ -38,36 +39,47 @@ namespace YTAHD.Tests
             {
                 File.WriteAllBytes(rawPath, rgbFrame);
 
-                var encodeArgs = $"-y -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 -i \"{rawPath}\" -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
-                using (var encode = Process.Start(new ProcessStartInfo(ffmpegPath, encodeArgs)
+                // CR-20260913-08: -nostdin closes the child's inherited (never-closing under a test
+                // host) stdin, and -hide_banner -loglevel error -nostats keeps stderr output far
+                // below the pipe buffer. Both pipes are redirected, so stderr is drained
+                // concurrently — an undrained redirected pipe froze the child on its final stderr
+                // write and hung the whole suite (see docs/decisions/CR-20260913-08).
+                var encodeArgs = $"-nostdin -hide_banner -loglevel error -nostats -y -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 -i \"{rawPath}\" -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
+                using (var encode = ChildProcessScope.Start(new ProcessStartInfo(ffmpegPath, encodeArgs)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }))
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true
+                }, "Failed to start ffmpeg for the real codec integration encode."))
                 {
-                    Assert.NotNull(encode);
-                    encode.WaitForExit();
-                    Assert.Equal(0, encode.ExitCode);
+                    encode.Process.StandardInput.Close();
+                    var encodeStdoutDrain = ChildProcessPipes.DrainAsync(encode.Process.StandardOutput);
+                    var encodeStderrDrain = ChildProcessPipes.DrainAsync(encode.Process.StandardError);
+                    Assert.True(encode.Process.WaitForExit(60_000), "ffmpeg encode did not finish within 60s.");
+                    Assert.Equal(0, encode.Process.ExitCode);
+                    await Task.WhenAll(encodeStdoutDrain, encodeStderrDrain);
                 }
 
-                var decodeArgs = $"-hide_banner -loglevel error -i \"{outputPath}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 -";
-                using var decode = Process.Start(new ProcessStartInfo(ffmpegPath, decodeArgs)
+                var decodeArgs = $"-nostdin -hide_banner -loglevel error -i \"{outputPath}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 -";
+                using var decode = ChildProcessScope.Start(new ProcessStartInfo(ffmpegPath, decodeArgs)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                });
-                Assert.NotNull(decode);
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true
+                }, "Failed to start ffmpeg for the real codec integration decode.");
+                decode.Process.StandardInput.Close();
+                var decodeStderrDrain = ChildProcessPipes.DrainAsync(decode.Process.StandardError);
 
                 var frameBytes = width * height * 3;
                 var decodedRgb = new byte[frameBytes];
                 int read = 0;
                 while (read < frameBytes)
                 {
-                    int n = decode.StandardOutput.BaseStream.Read(decodedRgb, read, frameBytes - read);
+                    int n = decode.Process.StandardOutput.BaseStream.Read(decodedRgb, read, frameBytes - read);
                     if (n == 0)
                     {
                         break;
@@ -76,7 +88,8 @@ namespace YTAHD.Tests
                     read += n;
                 }
 
-                decode.WaitForExit();
+                Assert.True(decode.Process.WaitForExit(60_000), "ffmpeg decode did not finish within 60s.");
+                await decodeStderrDrain;
                 Assert.True(read >= frameBytes, "ffmpeg decode did not produce the expected raw RGB frame");
 
                 var decodedPacket = new byte[150];
@@ -95,7 +108,7 @@ namespace YTAHD.Tests
         }
 
         [Fact]
-        public void DurabilityTransportCodec_RoundTrips_Through_Real_Libx264_Frames()
+        public async Task DurabilityTransportCodec_RoundTrips_Through_Real_Libx264_Frames()
         {
             var ffmpegPath = GetAvailableFfmpegPath();
             Assert.False(string.IsNullOrWhiteSpace(ffmpegPath), "ffmpeg must be available for the real durability integration test.");
@@ -131,32 +144,42 @@ namespace YTAHD.Tests
             {
                 File.WriteAllBytes(rawPath, rgbFrame);
 
-                var encodeArgs = $"-y -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 -i \"{rawPath}\" -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
-                using (var encode = Process.Start(new ProcessStartInfo(ffmpegPath, encodeArgs)
+                // Same hardening as the first test (CR-20260913-08): -nostdin, quiet stderr,
+                // and concurrent drains around the bounded waits.
+                var encodeArgs = $"-nostdin -hide_banner -loglevel error -nostats -y -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 -i \"{rawPath}\" -c:v libx264 -pix_fmt yuv420p -an \"{outputPath}\"";
+                using (var encode = ChildProcessScope.Start(new ProcessStartInfo(ffmpegPath, encodeArgs)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }))
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true
+                }, "Failed to start ffmpeg for the real durability integration encode."))
                 {
-                    Assert.NotNull(encode);
-                    encode.WaitForExit();
-                    Assert.Equal(0, encode.ExitCode);
+                    encode.Process.StandardInput.Close();
+                    var encodeStdoutDrain = ChildProcessPipes.DrainAsync(encode.Process.StandardOutput);
+                    var encodeStderrDrain = ChildProcessPipes.DrainAsync(encode.Process.StandardError);
+                    Assert.True(encode.Process.WaitForExit(60_000), "ffmpeg encode did not finish within 60s.");
+                    Assert.Equal(0, encode.Process.ExitCode);
+                    await Task.WhenAll(encodeStdoutDrain, encodeStderrDrain);
                 }
 
-                var decodeArgs = $"-hide_banner -loglevel error -i \"{outputPath}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 \"{decodedPath}\"";
-                using (var decode = Process.Start(new ProcessStartInfo(ffmpegPath, decodeArgs)
+                var decodeArgs = $"-nostdin -hide_banner -loglevel error -i \"{outputPath}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r 30 \"{decodedPath}\"";
+                using (var decode = ChildProcessScope.Start(new ProcessStartInfo(ffmpegPath, decodeArgs)
                 {
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }))
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true
+                }, "Failed to start ffmpeg for the real durability integration decode."))
                 {
-                    Assert.NotNull(decode);
-                    decode.WaitForExit();
-                    Assert.Equal(0, decode.ExitCode);
+                    decode.Process.StandardInput.Close();
+                    var decodeStdoutDrain = ChildProcessPipes.DrainAsync(decode.Process.StandardOutput);
+                    var decodeStderrDrain = ChildProcessPipes.DrainAsync(decode.Process.StandardError);
+                    Assert.True(decode.Process.WaitForExit(60_000), "ffmpeg decode did not finish within 60s.");
+                    Assert.Equal(0, decode.Process.ExitCode);
+                    await Task.WhenAll(decodeStdoutDrain, decodeStderrDrain);
                 }
 
                 Assert.True(File.Exists(decodedPath), "ffmpeg decode did not produce the RGB output file.");

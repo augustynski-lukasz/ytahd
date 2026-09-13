@@ -66,7 +66,8 @@ namespace YTAHD.Tests
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true
                 };
 
                 using var process = Process.Start(psi);
@@ -74,6 +75,8 @@ namespace YTAHD.Tests
                 {
                     return false;
                 }
+
+                process.StandardInput.Close();
 
                 process.WaitForExit();
                 return process.ExitCode == 0;

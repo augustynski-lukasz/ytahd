@@ -32,8 +32,9 @@ public class DecodeHwaccelTests
         var args = DecoderEngine.BuildDecodeArguments("in.mp4", Width, Height, Fps, HardwareAcceleration.None);
 
         Assert.DoesNotContain("-hwaccel", args);
-        // Default arguments stay byte-identical to the pre-CR-20260913-04 behavior.
-        Assert.Equal($"-hide_banner -loglevel error -i \"in.mp4\" -f rawvideo -pix_fmt rgb24 -s {Width}x{Height} -r {Fps} -", args);
+        // Default arguments stay byte-identical to the pre-CR-20260913-04 behavior apart from
+        // -nostdin (CR-20260913-08), which closes the child's inherited stdin.
+        Assert.Equal($"-nostdin -hide_banner -loglevel error -i \"in.mp4\" -f rawvideo -pix_fmt rgb24 -s {Width}x{Height} -r {Fps} -", args);
     }
 
     [Theory]

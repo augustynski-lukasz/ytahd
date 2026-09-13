@@ -161,6 +161,10 @@ namespace YTAHD.Core.Core
         /// frames in GPU surface memory (e.g. qsv surfaces) and the rgb24 swscale conversion
         /// fails with "Impossible to convert between the formats" (exit -40), yielding zero
         /// decodable frames.
+        /// <c>-nostdin</c> (CR-20260913-08) closes the child's stdin: ffmpeg monitors stdin for
+        /// interactive commands, and under a test host or service host the inherited stdin is a
+        /// pipe that never delivers data and never closes, which can freeze the child before it
+        /// writes a single frame.
         /// </summary>
         internal static string BuildDecodeArguments(string inputVideo, int width, int height, int fps, HardwareAcceleration acceleration)
         {
@@ -168,7 +172,7 @@ namespace YTAHD.Core.Core
             var hwaccelArgs = hwaccelFlag is null
                 ? string.Empty
                 : $"-hwaccel {hwaccelFlag} -hwaccel_output_format nv12 ";
-            return $"-hide_banner -loglevel error {hwaccelArgs}-i \"{inputVideo}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r {fps} -";
+            return $"-nostdin -hide_banner -loglevel error {hwaccelArgs}-i \"{inputVideo}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r {fps} -";
         }
 
         private string ResolveFfprobeExecutablePath()
@@ -206,13 +210,17 @@ namespace YTAHD.Core.Core
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                // CR-20260913-08: ffprobe has no -nostdin option; the inherited never-closing
+                // stdin under a host must be redirected (and closed right after start).
+                RedirectStandardInput = true
             };
 
             try
             {
                 using var child = ChildProcessScope.Start(psi, "Failed to start ffprobe.");
                 var proc = child.Process;
+                proc.StandardInput.Close();
 
                 var stderrDrain = ChildProcessPipes.DrainAsync(proc.StandardError);
                 var output = await ChildProcessPipes.ReadToEndAsync(proc.StandardOutput);
@@ -292,12 +300,18 @@ namespace YTAHD.Core.Core
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                // CR-20260913-08: the decode child reads nothing from stdin; an explicitly
+                // redirected (and closed) pipe removes the inherited never-closing stdin.
+                RedirectStandardInput = true
             };
 
             DebugTrace.Log("DecoderEngine", $"FFmpeg decode command: {ffmpegPath} {args}");
             using var child = ChildProcessScope.Start(psi, "Failed to start ffmpeg for decode.");
             var process = child.Process;
+            // Close the redirected stdin immediately: the decode reads nothing from stdin
+            // (CR-20260913-08).
+            process.StandardInput.Close();
 
             // stderr must be consumed while stdout is being read; otherwise a chatty decode can fill
             // the stderr pipe buffer and block ffmpeg before it finishes writing rgb frames to stdout.
