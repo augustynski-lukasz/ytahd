@@ -21,7 +21,7 @@ This does not scale:
 - The information to do better already exists frame-by-frame: the frame protocol is
   **ordered** (frame index in every packet header), the duplicate-run tracker emits
   logical frames in order, and `DecodeRecoveryPolicy.ShouldStopDecoding` already walks
-  the *contiguous prefix* of the accumulator — the concept of "frames 0..N-1 are final"
+  the _contiguous prefix_ of the accumulator — the concept of "frames 0..N-1 are final"
   is native to the design.
 
 ## Decision
@@ -31,7 +31,7 @@ Make the decode output path **streaming and memory-bounded**:
 1. **Contiguous-prefix flush.** The aggregator tracks the highest contiguous frame index
    with no gap. Once parity recovery for a group is possible (its parity frame seen, or
    the group is complete), frames whose position is final are handed to the consumer and
-   dropped from the accumulator. Only the *tail window* (frames after the last gap, plus
+   dropped from the accumulator. Only the _tail window_ (frames after the last gap, plus
    groups still awaiting parity) stays in memory.
 2. **Consumer abstraction.** The orchestrator accepts an output sink
    (`Stream`/`Func<Stream>`/callback) instead of returning one `byte[]`. The CLI passes a
@@ -43,9 +43,9 @@ Make the decode output path **streaming and memory-bounded**:
    durability path's manifest declares `TotalPayloadBytes` — the same bound applies once
    the manifest is recovered (manifest frames arrive early by design).
 4. **Integrity unchanged.** SHA-256 verification is inherently whole-payload; it becomes
-   a *streaming hash* over the sink (incremental `IncrementalHash`), so `integrity=`
+   a _streaming hash_ over the sink (incremental `IncrementalHash`), so `integrity=`
    semantics are preserved without re-reading the file. Hole-tolerant reconstruction
-   (CR-20260913-02) interacts with this: a wholly-missing group is a *gap* that blocks
+   (CR-20260913-02) interacts with this: a wholly-missing group is a _gap_ that blocks
    the contiguous prefix — its zero-filled hole can only be materialized once the loss
    map is known at end-of-stream, so holes keep the tail-window behavior (bounded by the
    hole size, not the payload size).
@@ -58,7 +58,7 @@ Make the decode output path **streaming and memory-bounded**:
   constant memory (disk-bound).
 - Output is durable incrementally: a crash keeps everything decoded so far.
 - The duplicate-run/parity-recovery ordering logic must be re-examined carefully: the
-  current `DecodedFrameAccumulator` recovers missing frames *retroactively* from parity
+  current `DecodedFrameAccumulator` recovers missing frames _retroactively_ from parity
   after all frames are seen; streaming requires per-group incremental recovery (recover
   group g as soon as its parity frame arrives and ≤1 member is missing). This is the
   main implementation risk and needs its own design pass on `DecodedFrameAccumulator`.
