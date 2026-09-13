@@ -1,6 +1,6 @@
 # CR-20260913-03 — Decode aggregation unification (shared DecodeAggregator)
 
-**Date:** 2026-09-13 **Status:** Accepted
+**Date:** 2026-09-13 **Status:** Implemented
 **Area:** `YTAHD.Core/Core` (`DecodeStreamOrchestrator`, new `DecodeAggregator`), `YTAHD.Tests`
 
 ## Context
@@ -48,3 +48,29 @@ practice" gap flagged in Review 1's risks.
   revert — no wire or API surface changes.
 - Sequencing: land before the next protocol change (the Phase 4 follow-up research in
   `docs/BACKLOG.md` is the natural next protocol work).
+- Integrity-semantics unification (deliberate behavior change, folded into this ADR per
+  the same workstream): the parallel durability path used to **throw**
+  `InvalidDataException` on `IntegrityStatus.Failed` while the serial path returned the
+  reconstructed payload with the failure recorded in metrics. The unified aggregator
+  adopts the **serial** semantics everywhere: a `Failed` verification still returns the
+  payload — including documented zero-filled holes with their loss map
+  (CR-20260913-02) — so callers can inspect what was recovered, and the CLI surfaces
+  `integrity=failed` from the metrics. The parallel throw was pinned by no test; the
+  serial return-with-`Failed` contract is pinned by
+  `CombinedClockArbitrationTests.SilentlyDropped_WholeParityGroup_Yields_Documented_Hole_And_Loss_Map`.
+  Net effect: a corrupted durability stream decoded in parallel now yields the same
+  documented-hole output and loss map as serial instead of discarding recoverable data
+  with an exception.
+- The serial path now also skips the duplicate-run logical-signature decode pass on the
+  durability branch (the durability path never compares frames), matching what the
+  parallel path already did.
+
+## Validation
+
+- Full suite: 306/306 passed (`dotnet test YTAHD.Tests/YTAHD.Tests.csproj`), including
+  the equivalence-pinning tests named above, unchanged.
+- Perf bench (phase3, 1 MB payload, durability on, real FFmpeg), before → after:
+  serial decode 138.29 s → 142.54 s (~3%, run noise), auto(4) decode 60.90 s → 35.58 s
+  (faster; within run-to-run variance for this workload), both runs `ok=yes` with
+  byte-identical payload recovery and identical output video size
+  (`perf-g1-baseline.json` / `perf-g1-after.json`).

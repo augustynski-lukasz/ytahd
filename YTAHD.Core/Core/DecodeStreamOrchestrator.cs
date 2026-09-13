@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -86,140 +85,32 @@ namespace YTAHD.Core.Core
                 return await ProcessParallelAsync(rgbStream, expectedOutputBytes, audioDatagramCount, totalVideoFrames, progress, borderWidth, payloadBytesPerFrame, rowBytes, frameBytes, bitsPerFrame, packetByteLength, totalStopwatch, cancellationToken);
             }
 
-            if (_useDurabilityMatrix)
-            {
-                var packets = new List<byte[]>();
-                byte[] frameBuf = new byte[frameBytes];
-                while (true)
-                {
-                    var readStopwatch = Stopwatch.StartNew();
-                    int read = 0;
-                    while (read < frameBytes)
-                    {
-                        int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read, cancellationToken);
-                        if (r == 0) break;
-                        read += r;
-                    }
-                    readStopwatch.Stop();
-                    frameReadMilliseconds += readStopwatch.Elapsed.TotalMilliseconds;
-
-                    if (read < frameBytes) break;
-                    progress?.Report(new DecodeProgress(packets.Count + 1, totalVideoFrames));
-
-                    var decodeStopwatch = Stopwatch.StartNew();
-                    if (DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
-                    {
-                        packets.Add(packet);
-                    }
-                    decodeStopwatch.Stop();
-                    packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
-                }
-
-                var aggregationStopwatch = Stopwatch.StartNew();
-                var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
-                var uniqueDataLengths = new Dictionary<(int GroupId, int SymbolId), int>();
-                foreach (var packet in packets)
-                {
-                    if (!FramePacketCodec.TryDecodeWithTolerance(packet, out var frameType, out var frameIndex, out _, out var groupStart, out _, out var payloadLength, out _))
-                    {
-                        continue;
-                    }
-
-                    if (frameType != FramePacket.FrameTypeData)
-                    {
-                        continue;
-                    }
-
-                    var groupId = groupStart / Math.Max(1, _durabilityMatrixOptions?.GroupSize ?? 1);
-                    var symbolId = Math.Max(0, frameIndex - groupStart);
-                    var key = (groupId, symbolId);
-                    if (!uniqueDataLengths.ContainsKey(key))
-                    {
-                        uniqueDataLengths[key] = payloadLength;
-                    }
-                }
-
-                int recoveredLength = uniqueDataLengths.Values.Sum();
-                if (recoveredLength <= 0)
-                {
-                    throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
-                }
-
-                // Hole-tolerant reconstruction (CR-20260913-02): a wholly-missing parity group
-                // becomes a zero-filled hole plus a loss-map entry instead of aborting the
-                // decode. Integrity verification below still fails loudly for any hole.
-                if (!durabilityCodec.TryDecodeFramePacketsWithHoles(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest, out var missingGroupIds))
-                {
-                    throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
-                }
-                aggregationStopwatch.Stop();
-                aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
-                totalStopwatch.Stop();
-
-                var serialMetrics = new DecodeMetrics
-                {
-                    TotalDecodedPayloadBytes = decodedBytes,
-                    TotalFramesDecoded = packets.Count,
-                    TotalFramesSeen = packets.Count,
-                    RecoveredGroupCount = packets.Count,
-                    RecoveredDataFrameCount = packets.Count,
-                    AudioDatagramCount = audioDatagramCount,
-                    TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds,
-                    FrameReadMilliseconds = frameReadMilliseconds,
-                    PacketDecodeMilliseconds = packetDecodeMilliseconds,
-                    AggregationMilliseconds = aggregationMilliseconds,
-                    Manifest = manifest,
-                    MissingDatagramIds = missingGroupIds
-                };
-                serialMetrics.IntegrityStatus = VerifyAgainstManifest(payload, manifest, serialMetrics);
-                LastDecodeMetrics = serialMetrics;
-
-                return payload;
-            }
-
-            var accumulator = new DecodedFrameAccumulator();
-            const int repeatedFrameCount = 3;
-            byte[] frameBufLegacy = new byte[frameBytes];
-            var duplicateTracker = new DuplicateFrameRunTracker();
-            var metrics = new DecodeMetrics();
+            // Both serial branches (durability and legacy) feed the same aggregator in stream
+            // order (CR-20260913-03); only the finalization differs.
+            var aggregator = new DecodeAggregator(
+                _useDurabilityMatrix,
+                _durabilityMatrixOptions!,
+                _width,
+                _height,
+                _macroblockSize,
+                rowBytes,
+                frameBytes,
+                bitsPerFrame,
+                payloadBytesPerFrame,
+                expectedOutputBytes,
+                audioDatagramCount,
+                _modulator);
             var frameBitDecoder = FrameBitDecoderFactory.CreateForModulator(_modulator);
+            byte[] frameBuf = new byte[frameBytes];
+            int framesRead = 0;
 
-            byte[] CreateLogicalSignature(byte[] frame)
-            {
-                var packet = new byte[packetByteLength];
-                var decodeStopwatch = Stopwatch.StartNew();
-                frameBitDecoder.DecodeMemory(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, packet, borderWidth);
-                decodeStopwatch.Stop();
-                packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
-                return packet;
-            }
-
-            bool DecodePayloadFrame(byte[] frame)
-            {
-                var aggregationStopwatch = Stopwatch.StartNew();
-                var added = accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
-                aggregationStopwatch.Stop();
-                aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
-                return added;
-            }
-
-            void FlushPendingRun()
-            {
-                if (!duplicateTracker.HasCurrentRun) return;
-
-                metrics.DuplicateRunCount++;
-                metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
-                duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
-            }
-
-            int legacyFrameIndex = 0;
             while (true)
             {
                 var readStopwatch = Stopwatch.StartNew();
                 int read = 0;
                 while (read < frameBytes)
                 {
-                    int r = await rgbStream.ReadAsync(frameBufLegacy, read, frameBytes - read, cancellationToken);
+                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read, cancellationToken);
                     if (r == 0) break;
                     read += r;
                 }
@@ -227,87 +118,53 @@ namespace YTAHD.Core.Core
                 frameReadMilliseconds += readStopwatch.Elapsed.TotalMilliseconds;
 
                 if (read < frameBytes) break;
-
-                legacyFrameIndex++;
-                metrics.TotalFramesSeen++;
-                progress?.Report(new DecodeProgress(metrics.TotalFramesSeen, totalVideoFrames));
-                DebugTrace.Log("DecodeStreamOrchestrator", $"Read frame #{legacyFrameIndex} ({read} bytes) for legacy decode path. invalid packets so far={metrics.InvalidPacketCount}");
+                framesRead++;
 
                 // Canonical separator frames (Phase 4) mark a datagram boundary; they carry no
                 // payload of their own and must not be counted as invalid/corrupted packets.
-                if (frameBitDecoder.IsCanonicalFrameMemory(frameBufLegacy, _width, _height, borderWidth))
-                {
-                    metrics.CanonicalFrameCount++;
-                    FlushPendingRun();
+                bool canonical = frameBitDecoder.IsCanonicalFrameMemory(frameBuf, _width, _height, borderWidth);
 
-                    if (DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes))
-                    {
-                        DebugTrace.Log("DecodeStreamOrchestrator", $"Stopping decode after canonical frame #{legacyFrameIndex}; accumulator bytes={accumulator.TotalDataFrames} expected={expectedOutputBytes}");
-                        break;
-                    }
-
-                    continue;
-                }
+                byte[]? packet = null;
+                bool packetIsValid = false;
+                byte[]? signature = null;
+                int quality = 0;
 
                 var decodeStopwatch = Stopwatch.StartNew();
-                var packetIsValid = DecoderEngine.TryReadDecodedPacket(frameBufLegacy, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet);
+                if (!canonical)
+                {
+                    packetIsValid = DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out packet);
+                    if (packetIsValid && !_useDurabilityMatrix)
+                    {
+                        // Duplicate-run arbitration needs the logical signature; the durability
+                        // path never compares frames, so skip the extra decode pass there.
+                        signature = new byte[packetByteLength];
+                        frameBitDecoder.DecodeMemory(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, signature, borderWidth);
+                        quality = DecoderEngine.GetPacketQualityScore(packet!);
+                    }
+                }
                 decodeStopwatch.Stop();
                 packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
-                if (!packetIsValid)
+
+                aggregator.Aggregate(new DecodedFrameResult(frameBuf, canonical, packetIsValid, packet, signature, quality));
+                progress?.Report(new DecodeProgress(aggregator.Metrics.TotalFramesSeen, totalVideoFrames));
+
+                if (aggregator.StopRequested)
                 {
-                    metrics.InvalidPacketCount++;
-                    DebugTrace.Log("DecodeStreamOrchestrator", $"Invalid packet on frame #{legacyFrameIndex}; invalidPacketCount={metrics.InvalidPacketCount}");
-                    continue;
-                }
-
-                var currentLogicalSignature = CreateLogicalSignature(frameBufLegacy);
-                int currentQuality = DecoderEngine.GetPacketQualityScore(packet);
-
-                var aggregationStopwatch = Stopwatch.StartNew();
-                var completedFrame = duplicateTracker.Update(frameBufLegacy, currentLogicalSignature, currentQuality);
-                if (completedFrame is not null)
-                {
-                    metrics.DuplicateRunCount++;
-                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completedFrame.BestQuality);
-                    duplicateTracker.Flush(completedFrame, repeatedFrameCount, frame => DecodePayloadFrame(frame));
-                }
-
-                var shouldStop = DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes);
-                aggregationStopwatch.Stop();
-                aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
-
-                if (shouldStop)
-                {
-                    DebugTrace.Log("DecodeStreamOrchestrator", $"Stopping decode after frame #{legacyFrameIndex}; accumulator bytes={accumulator.TotalDataFrames} expected={expectedOutputBytes}");
+                    DebugTrace.Log("DecodeStreamOrchestrator", $"Stopping decode after frame #{framesRead}; expected={expectedOutputBytes}");
                     break;
                 }
             }
 
-            var finalAggregationStopwatch = Stopwatch.StartNew();
-            duplicateTracker.FlushCurrentRun(repeatedFrameCount, frame => DecodePayloadFrame(frame));
-
-            if (accumulator.TotalDataFrames < 0 || accumulator.OrderedPayload.Count == 0)
-                throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
-
-            int resolvedExpectedBytes = DecodeRecoveryPolicy.ResolveExpectedOutputBytes(accumulator, expectedOutputBytes);
-            accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, resolvedExpectedBytes);
-            metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
-            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
-            metrics.TotalDecodedPayloadBytes = resolvedExpectedBytes;
-            metrics.TotalFramesDecoded = accumulator.TotalDataFrames;
-            metrics.RecoveredDataFrameCount = accumulator.OrderedPayload.Count;
-            metrics.RecoveredParityFrameCount = accumulator.ParityPayloadByGroup.Count;
-            metrics.AudioDatagramCount = audioDatagramCount;
-            finalAggregationStopwatch.Stop();
-            aggregationMilliseconds += finalAggregationStopwatch.Elapsed.TotalMilliseconds;
+            var aggregationStopwatch = Stopwatch.StartNew();
+            byte[] payload = _useDurabilityMatrix ? aggregator.FinalizeDurability() : aggregator.FinalizeLegacy();
+            aggregationStopwatch.Stop();
+            aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
             totalStopwatch.Stop();
-            metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
-            metrics.FrameReadMilliseconds = frameReadMilliseconds;
-            metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
-            metrics.AggregationMilliseconds = aggregationMilliseconds;
-            LastDecodeMetrics = metrics;
 
-            return accumulator.AssembleOutput(resolvedExpectedBytes);
+            aggregator.Complete(totalStopwatch.Elapsed.TotalMilliseconds, frameReadMilliseconds, packetDecodeMilliseconds, aggregationMilliseconds);
+            LastDecodeMetrics = aggregator.Metrics;
+
+            return payload;
         }
 
         private async Task<byte[]> ProcessParallelAsync(
@@ -436,64 +293,33 @@ namespace YTAHD.Core.Core
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
 
+            double packetDecodeMilliseconds = 0d;
+            double aggregationMilliseconds = 0d;
             var aggregator = Task.Run(async () =>
             {
+                // Aggregation semantics are shared with the serial path (CR-20260913-03); results
+                // are fed strictly in sequence order so the aggregator stays single-threaded.
+                var shared = new DecodeAggregator(
+                    _useDurabilityMatrix,
+                    _durabilityMatrixOptions!,
+                    _width,
+                    _height,
+                    _macroblockSize,
+                    rowBytes,
+                    frameBytes,
+                    bitsPerFrame,
+                    payloadBytesPerFrame,
+                    expectedOutputBytes,
+                    audioDatagramCount,
+                    _modulator);
                 var pending = new SortedDictionary<long, DecodedFrame>();
-                var packets = new List<byte[]>();
-                var accumulator = new DecodedFrameAccumulator();
-                var duplicateTracker = new DuplicateFrameRunTracker();
-                var metrics = new DecodeMetrics();
-                const int repeatedFrameCount = 3;
-                double packetDecodeMilliseconds = 0d;
-                double aggregationMilliseconds = 0d;
                 long nextSequence = 0;
-                bool stopRequested = false;
-
-                bool DecodePayloadFrame(byte[] frame)
-                {
-                    return accumulator.TryAddDecodedFrame(frame, _width, _height, _macroblockSize, rowBytes, frameBytes, payloadBytesPerFrame, bitsPerFrame, _modulator);
-                }
-
-                void FlushPendingRun()
-                {
-                    if (!duplicateTracker.HasCurrentRun) return;
-                    metrics.DuplicateRunCount++;
-                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
-                    duplicateTracker.FlushCurrentRun(repeatedFrameCount, DecodePayloadFrame);
-                }
 
                 void Aggregate(DecodedFrame result)
                 {
-                    var aggregationStopwatch = Stopwatch.StartNew();
+                    shared.Aggregate(new DecodedFrameResult(result.Frame, result.Canonical, result.PacketIsValid, result.Packet, result.Signature, result.Quality));
                     packetDecodeMilliseconds += result.DecodeMilliseconds;
-                    metrics.TotalFramesSeen++;
-                    progress?.Report(new DecodeProgress(metrics.TotalFramesSeen, totalVideoFrames));
-                    if (result.Canonical)
-                    {
-                        metrics.CanonicalFrameCount++;
-                        FlushPendingRun();
-                    }
-                    else if (!result.PacketIsValid)
-                    {
-                        metrics.InvalidPacketCount++;
-                    }
-                    else if (_useDurabilityMatrix)
-                    {
-                        packets.Add(result.Packet!);
-                    }
-                    else
-                    {
-                        var completed = duplicateTracker.Update(result.Frame, result.Signature!, result.Quality);
-                        if (completed is not null)
-                        {
-                            metrics.DuplicateRunCount++;
-                            metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, completed.BestQuality);
-                            duplicateTracker.Flush(completed, repeatedFrameCount, DecodePayloadFrame);
-                        }
-                    }
-                    stopRequested |= !_useDurabilityMatrix && DecodeRecoveryPolicy.ShouldStopDecoding(accumulator, expectedOutputBytes);
-                    aggregationStopwatch.Stop();
-                    aggregationMilliseconds += aggregationStopwatch.Elapsed.TotalMilliseconds;
+                    progress?.Report(new DecodeProgress(shared.Metrics.TotalFramesSeen, totalVideoFrames));
                 }
 
                 try
@@ -503,92 +329,23 @@ namespace YTAHD.Core.Core
                         pending.Add(result.Sequence, result);
                         while (pending.Remove(nextSequence, out var ordered))
                         {
-                            if (!stopRequested) Aggregate(ordered);
+                            if (!shared.StopRequested) Aggregate(ordered);
                             resultSlots.Release();
                             nextSequence++;
                         }
                     }
                     while (pending.Remove(nextSequence, out var finalResult))
                     {
-                        if (!stopRequested) Aggregate(finalResult);
+                        if (!shared.StopRequested) Aggregate(finalResult);
                         resultSlots.Release();
                         nextSequence++;
                     }
 
-                    if (_useDurabilityMatrix)
-                    {
-                        var durabilityCodec = new DurabilityTransportCodec(_durabilityMatrixOptions ?? new DurabilityMatrixOptions());
-                        var uniqueDataLengths = new Dictionary<(int GroupId, int SymbolId), int>();
-                        foreach (var packet in packets)
-                        {
-                            if (!FramePacketCodec.TryDecodeWithTolerance(packet, out var frameType, out var frameIndex, out _, out var groupStart, out _, out var payloadLength, out _) || frameType != FramePacket.FrameTypeData)
-                                continue;
-                            uniqueDataLengths.TryAdd((groupStart / Math.Max(1, _durabilityMatrixOptions?.GroupSize ?? 1), Math.Max(0, frameIndex - groupStart)), payloadLength);
-                        }
-                        int recoveredLength = uniqueDataLengths.Values.Sum();
-                        if (recoveredLength <= 0)
-                            throw new InvalidDataException("Decoded durability payload is incomplete. No valid frame packets were recovered.");
-
-                        // Hole-tolerant reconstruction (CR-20260913-02): a wholly-missing parity
-                        // group becomes a zero-filled hole plus a loss-map entry instead of
-                        // aborting the decode. Integrity verification below still fails loudly.
-                        if (!durabilityCodec.TryDecodeFramePacketsWithHoles(packets, recoveredLength, out var payload, out var decodedBytes, out var manifest, out var missingGroupIds))
-                            throw new InvalidDataException("Durability matrix could not reconstruct the payload from the recovered packets.");
-
-                        metrics.Manifest = manifest;
-                        metrics.MissingDatagramIds = missingGroupIds;
-                        metrics.IntegrityStatus = VerifyAgainstManifest(payload, manifest, metrics);
-                        if (metrics.IntegrityStatus == IntegrityStatus.Failed)
-                        {
-                            metrics.TotalDecodedPayloadBytes = decodedBytes;
-                            metrics.TotalFramesDecoded = packets.Count;
-                            metrics.TotalFramesSeen = packets.Count;
-                            metrics.RecoveredGroupCount = packets.Count;
-                            metrics.RecoveredDataFrameCount = packets.Count;
-                            metrics.AudioDatagramCount = audioDatagramCount;
-                            metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
-                            metrics.FrameReadMilliseconds = frameReadMilliseconds;
-                            metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
-                            metrics.AggregationMilliseconds = aggregationMilliseconds;
-                            LastDecodeMetrics = metrics;
-                            throw new InvalidDataException(
-                                manifest is not null && manifest.TotalPayloadBytes != decodedBytes
-                                    ? $"Recovered payload length {decodedBytes} does not match the stream manifest's declared {manifest.TotalPayloadBytes} bytes."
-                                    : "Recovered payload hash does not match the stream manifest's SHA-256. The output would be silently corrupt.");
-                        }
-
-                        metrics.TotalDecodedPayloadBytes = decodedBytes;
-                        metrics.TotalFramesDecoded = packets.Count;
-                        metrics.TotalFramesSeen = packets.Count;
-                        metrics.RecoveredGroupCount = packets.Count;
-                        metrics.RecoveredDataFrameCount = packets.Count;
-                        metrics.AudioDatagramCount = audioDatagramCount;
-                        metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
-                        metrics.FrameReadMilliseconds = frameReadMilliseconds;
-                        metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
-                        metrics.AggregationMilliseconds = aggregationMilliseconds;
-                        LastDecodeMetrics = metrics;
-                        return payload;
-                    }
-
-                    duplicateTracker.FlushCurrentRun(repeatedFrameCount, DecodePayloadFrame);
-                    if (accumulator.OrderedPayload.Count == 0)
-                        throw new InvalidDataException("Decoded payload is incomplete. No valid frames were decoded.");
-                    int resolvedExpectedBytes = DecodeRecoveryPolicy.ResolveExpectedOutputBytes(accumulator, expectedOutputBytes);
-                    accumulator.RecoverMissingPayloadFrames(accumulator.TotalDataFrames, payloadBytesPerFrame, resolvedExpectedBytes);
-                    metrics.RecoveredGroupCount = accumulator.RecoveredGroupCount;
-                    metrics.StrongestDuplicateQuality = Math.Max(metrics.StrongestDuplicateQuality, duplicateTracker.BestQuality);
-                    metrics.TotalDecodedPayloadBytes = resolvedExpectedBytes;
-                    metrics.TotalFramesDecoded = accumulator.TotalDataFrames;
-                    metrics.RecoveredDataFrameCount = accumulator.OrderedPayload.Count;
-                    metrics.RecoveredParityFrameCount = accumulator.ParityPayloadByGroup.Count;
-                    metrics.AudioDatagramCount = audioDatagramCount;
-                    metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
-                    metrics.FrameReadMilliseconds = frameReadMilliseconds;
-                    metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
-                    metrics.AggregationMilliseconds = aggregationMilliseconds;
-                    LastDecodeMetrics = metrics;
-                    return accumulator.AssembleOutput(resolvedExpectedBytes);
+                    byte[] payload = _useDurabilityMatrix ? shared.FinalizeDurability() : shared.FinalizeLegacy();
+                    totalStopwatch.Stop();
+                    shared.Complete(totalStopwatch.Elapsed.TotalMilliseconds, frameReadMilliseconds, packetDecodeMilliseconds, aggregationMilliseconds);
+                    LastDecodeMetrics = shared.Metrics;
+                    return payload;
                 }
                 catch
                 {
@@ -612,34 +369,6 @@ namespace YTAHD.Core.Core
                 try { await reader; } catch { }
                 try { await workersCompletion; } catch { }
             }
-        }
-
-        /// <summary>
-        /// Whole-payload verification against a recovered stream manifest (CR-20260912-05 stage 3):
-        /// the manifest's declared length and SHA-256 are authoritative. Returns the integrity
-        /// status to report; <see cref="IntegrityStatus.FrameOnly"/> when no manifest is present
-        /// (legacy durability stream), <see cref="IntegrityStatus.Failed"/> on a length or hash
-        /// mismatch, <see cref="IntegrityStatus.Passed"/> when both agree.
-        /// </summary>
-        private static IntegrityStatus VerifyAgainstManifest(byte[] payload, StreamManifest? manifest, DecodeMetrics metrics)
-        {
-            metrics.Manifest = manifest;
-            if (manifest is null)
-            {
-                // Legacy durability stream without a manifest: per-frame hashes were enforced,
-                // but whole-payload integrity cannot be proven.
-                return IntegrityStatus.FrameOnly;
-            }
-
-            if (manifest.TotalPayloadBytes != payload.LongLength)
-            {
-                return IntegrityStatus.Failed;
-            }
-
-            var actualHash = SHA256.HashData(payload);
-            return actualHash.AsSpan().SequenceEqual(manifest.PayloadSha256)
-                ? IntegrityStatus.Passed
-                : IntegrityStatus.Failed;
         }
 
         private static void InterlockedAdd(ref double location, double value)

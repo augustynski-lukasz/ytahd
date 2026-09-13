@@ -9,10 +9,6 @@ Design ADRs are already `Accepted` in `docs/decisions/`; each item = one commit 
 `docs/PLAN.md` Workstream G. G1–G3 should land **before the next protocol change** (the
 Phase 4 follow-up research below is the natural next protocol work).
 
-- **G1 — Decode aggregation unification (R1; fixes F1+F2).** Extract shared
-  `DecodeAggregator` for the serial/parallel decode paths in `DecodeStreamOrchestrator`.
-  ADR `CR-20260913-03-decode-aggregation-unification.md`. Requires a `YTAHD.Perf bench`
-  before/after run (≥ 1 MB payload, durability on) as merge evidence.
 - **G2 — Wire `--hwaccel` into decode (R2; fixes F5).** Thread
   `DecodeOptions.HardwareAcceleration` into `DecoderEngine` args via
   `FFmpegEncoderArguments.HwaccelValue`; default `none` emits nothing. ADR
