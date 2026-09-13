@@ -750,7 +750,10 @@ namespace YTAHD.Tests
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
                         UseShellExecute = false,
-                        CreateNoWindow = true
+                        CreateNoWindow = true,
+                        // The CLI child must not inherit the test host's never-closing stdin pipe
+                        // (CR-20260913-08): ffmpeg under it monitors stdin for interactive commands.
+                        RedirectStandardInput = true
                     }
                 };
                 encodeProcess.Start();
@@ -770,7 +773,9 @@ namespace YTAHD.Tests
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
                         UseShellExecute = false,
-                        CreateNoWindow = true
+                        CreateNoWindow = true,
+                        // See the encode spawn above (CR-20260913-08).
+                        RedirectStandardInput = true
                     }
                 };
                 decodeProcess.Start();
@@ -821,7 +826,9 @@ namespace YTAHD.Tests
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
                         UseShellExecute = false,
-                        CreateNoWindow = true
+                        CreateNoWindow = true,
+                        // See the phase2 encode spawn above (CR-20260913-08).
+                        RedirectStandardInput = true
                     }
                 };
                 encodeProcess.Start();
@@ -841,7 +848,9 @@ namespace YTAHD.Tests
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
                         UseShellExecute = false,
-                        CreateNoWindow = true
+                        CreateNoWindow = true,
+                        // See the phase2 encode spawn above (CR-20260913-08).
+                        RedirectStandardInput = true
                     }
                 };
                 decodeProcess.Start();
