@@ -28,6 +28,8 @@ namespace YTAHD.Core.Core
         private readonly DurabilityMatrixOptions? _durabilityMatrixOptions;
         private readonly bool _useAudioClock;
         private readonly IProgress<DecodeProgress>? _progress;
+        /// <summary>Decode-side hardware acceleration mode; <see cref="HardwareAcceleration.None"/> emits no flag (CR-20260913-04).</summary>
+        private readonly HardwareAcceleration _hardwareAcceleration;
         /// <summary>Resolved worker count from <see cref="ParallelismPolicy"/>; <c>1</c> selects the serial path.</summary>
         private readonly int _maxDegreeOfParallelism;
 
@@ -45,6 +47,7 @@ namespace YTAHD.Core.Core
             _durabilityMatrixOptions = null;
             _useAudioClock = false;
             _progress = null;
+            _hardwareAcceleration = HardwareAcceleration.None;
             _maxDegreeOfParallelism = ParallelismPolicy.Resolve(0);
         }
 
@@ -55,6 +58,7 @@ namespace YTAHD.Core.Core
             _durabilityMatrixOptions = options.DurabilityMatrixOptions ?? new DurabilityMatrixOptions();
             _useAudioClock = options.UseAudioClock;
             _progress = options is DecodeOptions decodeOptions ? decodeOptions.Progress : null;
+            _hardwareAcceleration = options.HardwareAcceleration;
             _maxDegreeOfParallelism = ParallelismPolicy.Resolve(options.MaxDegreeOfParallelism);
         }
 
@@ -146,6 +150,25 @@ namespace YTAHD.Core.Core
         {
             if (!await _ffmpeg.IsAvailableAsync())
                 throw new InvalidOperationException("ffmpeg not found in PATH or not runnable");
+        }
+
+        /// <summary>
+        /// Builds the ffmpeg decode arguments. <paramref name="hardwareAcceleration"/> of
+        /// <see cref="HardwareAcceleration.None"/> emits no flag, so the default arguments stay
+        /// byte-identical to the pre-CR-20260913-04 behavior. <c>-hwaccel</c> must precede
+        /// <c>-i</c> to affect input decoding. When a mode is active,
+        /// <c>-hwaccel_output_format nv12</c> is required: without it ffmpeg defaults to keeping
+        /// frames in GPU surface memory (e.g. qsv surfaces) and the rgb24 swscale conversion
+        /// fails with "Impossible to convert between the formats" (exit -40), yielding zero
+        /// decodable frames.
+        /// </summary>
+        internal static string BuildDecodeArguments(string inputVideo, int width, int height, int fps, HardwareAcceleration acceleration)
+        {
+            var hwaccelFlag = FFmpegEncoderArguments.HwaccelValue(acceleration);
+            var hwaccelArgs = hwaccelFlag is null
+                ? string.Empty
+                : $"-hwaccel {hwaccelFlag} -hwaccel_output_format nv12 ";
+            return $"-hide_banner -loglevel error {hwaccelArgs}-i \"{inputVideo}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r {fps} -";
         }
 
         private string ResolveFfprobeExecutablePath()
@@ -263,7 +286,7 @@ namespace YTAHD.Core.Core
             }
 
             int totalVideoFrames = await FFmpegProbe.GetVideoFrameCountAsync(inputVideo, _ffmpeg.ExecutablePath);
-            var args = $"-hide_banner -loglevel error -i \"{inputVideo}\" -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r {fps} -";
+            var args = BuildDecodeArguments(inputVideo, width, height, fps, _hardwareAcceleration);
             var psi = new ProcessStartInfo(ffmpegPath, args)
             {
                 CreateNoWindow = true,

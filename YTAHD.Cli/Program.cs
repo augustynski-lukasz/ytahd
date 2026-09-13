@@ -265,10 +265,12 @@ var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "p
 var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-path" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
 var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 var decodeJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
+var decodeHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);
 decodeCommand.AddOption(decodeAudioClock);
 decodeCommand.AddOption(decodeJobs);
+decodeCommand.AddOption(decodeHwaccel);
 decodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
     var input = ctx.ParseResult.GetValueForArgument(decodeIn);
@@ -277,6 +279,7 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var ffmpegPath = ctx.ParseResult.GetValueForOption(decodeFfmpegPath);
     var useAudioClock = ctx.ParseResult.GetValueForOption(decodeAudioClock);
     var jobs = ctx.ParseResult.GetValueForOption(decodeJobs);
+    var hwaccelValue = ctx.ParseResult.GetValueForOption(decodeHwaccel);
 
     if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
     {
@@ -285,16 +288,24 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
         return;
     }
 
+    if (!TryParseHwaccel(hwaccelValue, out var hwaccel, out var hwaccelError))
+    {
+        Console.Error.WriteLine(hwaccelError);
+        ctx.ExitCode = 1;
+        return;
+    }
+
     var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
     var modulator = CreateModulator(modulatorName);
-    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, audioClock={useAudioClock}, parallelism={parallelism}]");
+    Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, hwaccel={hwaccel}, audioClock={useAudioClock}, parallelism={parallelism}]");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
     await service.DecodeAsync(new DecodeOptions
     {
         InputVideo = input.FullName,
         OutputFile = output.FullName,
         UseAudioClock = useAudioClock,
+        HardwareAcceleration = hwaccel,
         MaxDegreeOfParallelism = requestedJobs,
         VerifyFfmpeg = true,
         Progress = CreateDecodeProgressReporter()

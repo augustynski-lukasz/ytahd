@@ -1,6 +1,7 @@
 # TD-20260913-01 — Remove unused NuGet dependencies (SkiaSharp, MathNet.Numerics)
 
-**Date:** 2026-09-13 **Status:** Accepted
+**Date:** 2026-09-13 **Status:** Implemented (commit `75697e9`; build exit 0, 0 warnings;
+full suite 299/299 green)
 **Area:** `YTAHD.Core/YTAHD.Core.csproj`, `YTAHD.Core/Core/EncoderEngine.cs`
 
 ## Context
