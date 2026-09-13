@@ -23,7 +23,7 @@ frozen.
 - The child of that test (ffmpeg, file→file transcode) was frozen at 0.03–0.05s CPU with
   all 18 threads in Wait state, having written only a 48-byte MP4 header.
 - Red herrings: the 2026-09-12 notes blamed a post-run xUnit/vstest handshake hang; the
-  first fix attempt (`-nostdin` alone) still froze — but with a *complete* 2019-byte
+  first fix attempt (`-nostdin` alone) still froze — but with a _complete_ 2019-byte
   output file, which moved the diagnosis forward.
 
 ## Root cause
@@ -36,7 +36,7 @@ pattern in two production probe paths):
    closes. ffmpeg probes stdin for interactive commands and blocked at startup before
    writing a single frame. `-nostdin` did **not** fix this under the test host: the
    decisive experiment showed the same spawn still freezing with `-nostdin` but passing
-   in 80 ms once stdin was *explicitly redirected and closed*.
+   in 80 ms once stdin was _explicitly redirected and closed_.
 2. **Undrained redirected stderr with unbounded output.** The encode spawns lacked
    `-hide_banner -loglevel error -nostats`, so ffmpeg wrote banner + stream info + x264
    config + summary to the redirected-but-never-drained stderr pipe; past the kernel pipe
@@ -65,16 +65,16 @@ a failure.
   bounded at 30 s.
 - Gotcha discovered during validation: **ffprobe has no `-nostdin` option** — adding it
   makes every probe fail with `Failed to set value '-v' for option 'nostdin': Option not
-  found` (exit 1), which surfaced as `FFprobe_Reports_FrameCount_For_Short_Video_Clip`
+found` (exit 1), which surfaced as `FFprobe_Reports_FrameCount_For_Short_Video_Clip`
   reporting 0 frames. The explicit stdin redirect+close is the universal fix; `-nostdin`
   is ffmpeg-only defense-in-depth.
 
 ## Lessons
 
-- `dotnet-stack report -p <pid>` on a *live* hung testhost is the fastest path to the
+- `dotnet-stack report -p <pid>` on a _live_ hung testhost is the fastest path to the
   truth; the 2026-09-12 session's "post-run handshake" conclusion was inferred without
   one and was wrong (or at least incomplete — this session's hang was mid-test).
-- A fix that "doesn't work" can be a *different* defect surfacing: compare the new
+- A fix that "doesn't work" can be a _different_ defect surfacing: compare the new
   failure signature (complete output file vs. 48-byte header) before concluding the
   fix was wrong.
 - `-nostdin` does not substitute for an explicitly redirected+closed stdin under a host
