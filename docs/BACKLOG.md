@@ -2,6 +2,21 @@
 
 Open items only. When an item is resolved, delete it from here and add an ADR in `docs/decisions/`.
 
+## Plain decode path is not guaranteed byte-exact for long streams
+
+From the 2026-09-14 real-user CLI validation (1 MB payloads): the plain decode path
+(xor-parity, one loss per group, no manifest) accumulates per-frame bit errors from lossy
+libx264 over long streams. Observed: 1 MB phase2 throws (`2 missing data frames` in one
+parity group); 256 KB phase2 **silently truncates** (260378 of 262144 bytes, exit 0,
+`integrity=unknown`). Root cause and regression coverage in ADR
+`F-20260914-03-long-stream-regression-coverage.md`; the durability matrix
+(`--durability`, CR-20260913-02) round-trips the same streams byte-exact with
+`integrity=passed` and is the supported path for large payloads.
+
+Open follow-up: the CLI knows the input file size at decode time but only *prints*
+`payloadRecovered` — it should compare the two and exit non-zero on mismatch, turning the
+silent-truncation case into a loud failure even on the plain path. Not started.
+
 ## Streaming decode output (memory-bounded payload assembly)
 
 From the 2026-09-14 real-user CLI validation (10 MB @ 4K): the decode assembles the entire

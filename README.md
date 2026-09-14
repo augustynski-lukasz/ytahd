@@ -41,7 +41,8 @@ dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
 | `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.             |
 | `--video-encoder`, `-E` | `libx264` | Video encoder: `libx264` (CPU baseline), `h264_qsv` (Intel Quick Sync), `h264_nvenc`/`h264_amf` (experimental). |
 | `--hwaccel` | `none` | Decode-side hardware acceleration for experiments: `none`, `qsv`, `cuda`, `d3d11va`. |
-| `--audio-clock`           | `false`       | Mux an audio FSK datagram clock alongside the video.        |
+| `--audio-clock`         | `false` | Mux an audio FSK datagram clock alongside the video.         |
+| `--durability`, `-D`    | `false` | Use the durability matrix: per-symbol hashes, XOR parity groups, and a stream manifest with SHA-256 whole-payload verification. Recommended for payloads larger than a few KB. |
 
 ### Decode
 
@@ -54,6 +55,20 @@ dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 | `--modulator`, `-M` | `phase1`      | Modulation mode used to create the video.                                 |
 | `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                           |
 | `--audio-clock`     | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count. |
+| `--durability`, `-D` | `false`      | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
+
+### Reliability: use `--durability` for large payloads
+
+The default (plain) decode path uses simple XOR parity that can recover **one** lost frame
+per parity group and has no whole-payload verification. Lossy video encoding accumulates
+per-frame bit errors, so over long streams (hundreds of data frames) the plain path can
+fail — and in the worst case return a silently truncated payload with no error
+(see `docs/decisions/F-20260914-03-long-stream-regression-coverage.md`).
+
+For any payload beyond a few KB, encode **and** decode with `--durability`: the durability
+matrix adds per-symbol hashes, multi-erasure repair, and a manifest whose SHA-256 is
+verified on decode (`integrity=passed/failed` in the summary). Validated byte-exact at
+1 MB / 4K resolution (see `docs/decisions/F-20260914-01-cli-durability-flag.md`).
 
 ### Reusable Service API
 
