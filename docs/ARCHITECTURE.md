@@ -504,8 +504,8 @@ Frame layout (row-major bit order, MSB first within each byte):
 **Files:** `PseudoQamModulator.cs`, `PseudoQamFrameBitDecoder.cs`. Border: **32 px**,
 painted with a calibration pattern + pilot palette. Block: 16×16 px. **1 byte per block.**
 
-**Math.** Each byte $v$ splits into nibbles $\text{lo} = v \mathbin{\&} \text{0x0F}$,
-$\text{hi} = v \gg 4$. Each nibble $n \in [0,15]$ maps to a 16-level pulse-amplitude
+**Math.** Each byte $v$ splits into nibbles $\text{lo} = v \bmod 16$ (the low 4 bits),
+$\text{hi} = \lfloor v / 16 \rfloor$ (the high 4 bits). Each nibble $n \in [0,15]$ maps to a 16-level pulse-amplitude
 modulation value with step $S = 17$ (since $15 \times 17 = 255$):
 
 $$
@@ -603,7 +603,7 @@ flowchart LR
 guard margin on every side. **1 byte per cell.**
 
 **Math.** Each byte $v$ splits into axis codes
-$\text{dx}_c = (v \gg 4) \mathbin{\&} \text{0xF}$, $\text{dy}_c = v \mathbin{\&} \text{0xF}$.
+$\text{dx}_c = \lfloor v / 16 \rfloor$ (high nibble), $\text{dy}_c = v \bmod 16$ (low nibble).
 Each 4-bit code maps to a **non-zero even pixel offset** (step 2 px, 16 levels):
 
 $$
@@ -621,7 +621,7 @@ canonical / no-data marker** — every tile at its home position means "separato
 no side channel. Algorithm (`MotionTileBasis.BuildTexture`):
 
 1. xorshift32 PRNG seeded with the protocol constant `0x59544148` (`'YTAH'`):
-   $s \mathrel{\^}= s \ll 13;\ s \mathrel{\^}= s \gg 17;\ s \mathrel{\^}= s \ll 5$;
+   $s \mathrel{\oplus}{=} s \ll 13;\ s \mathrel{\oplus}{=} s \gg 17;\ s \mathrel{\oplus}{=} s \ll 5$;
    values mapped to $[-1, 1]$.
 2. Two passes of 3×3 box blur (edge-clamped) — band-limits the noise so a lossy codec
    preserves it.
