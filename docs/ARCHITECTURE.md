@@ -588,13 +588,12 @@ needed. Bit order within the block: carrier 0 is the MSB of the block's byte.
 ```mermaid
 flowchart LR
     subgraph "8×8 DCT block — carrier map"
-        row0["·  b0  ·  b3  ·  ·  ·  ·"]
-        row1["b1  b2  ·  ·  b7 ·  ·  ·"]
-        row2["b4  ·  ·  ·  ·  ·  ·  ·"]
-        row3["b5  ·  ·  ·  ·  ·  ·  ·"]
-        row4["·   ·  ·  ·  ·  ·  ·  ·"]
+        row0["DC b1 b4 b6 · · · ·"]
+        row1["b0 b2 b7 · · · · ·"]
+        row2["b3 · · · · · · ·"]
+        row3["b5 · · · · · · ·"]
     end
-    note["· = unused (DC at 0,0 = 1024).<br/>b0..b7 = payload bits, MSB first.<br/>+128 → bit 1, −128 → bit 0"]
+    note["DC at (0,0) = 1024, not used for data.<br/>b0..b7 = payload bits, MSB first.<br/>+128 → bit 1, −128 → bit 0"]
 ```
 
 ### 7.4 Phase 4 — Motion-vector carrier (1 byte per 40×40 cell)
@@ -663,7 +662,7 @@ decoded from a single frame.
 | Carrier                             | binary luma              | 16-PAM on R,G                | DCT AC sign              | tile displacement         |
 | Border                              | 0 px                     | 32 px + pilot palette        | 32 px gray               | 32 px gray                |
 | Loss robustness                     | high (threshold scoring) | medium (±8 decision regions) | high (low-freq carriers) | high (SAD search)         |
-| Relative capacity @4K (bytes/frame) | 1× (4,050)               | ~7.6× (30,863)               | ~30.5× (123,611)         | ~1.2× (4,893)             |
+| Relative capacity @4K (bytes/frame) | 1× (3,997) | ~7.7× (30,863) | ~30.9× (123,611) | ~1.2× (4,835) |
 | Physical frames / logical           | 3                        | 3                            | 3                        | 2 (displaced + canonical) |
 
 ---
