@@ -662,7 +662,7 @@ decoded from a single frame.
 | Carrier                             | binary luma              | 16-PAM on R,G                | DCT AC sign              | tile displacement         |
 | Border                              | 0 px                     | 32 px + pilot palette        | 32 px gray               | 32 px gray                |
 | Loss robustness                     | high (threshold scoring) | medium (±8 decision regions) | high (low-freq carriers) | high (SAD search)         |
-| Relative capacity @4K (bytes/frame) | 1× (3,997) | ~7.7× (30,863) | ~30.9× (123,611) | ~1.2× (4,835) |
+| Relative capacity @4K (bytes/frame) | 1× (3,997)               | ~7.7× (30,863)               | ~30.9× (123,611)         | ~1.2× (4,835)             |
 | Physical frames / logical           | 3                        | 3                            | 3                        | 2 (displaced + canonical) |
 
 ---
