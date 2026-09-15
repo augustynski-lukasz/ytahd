@@ -31,18 +31,18 @@ modulation) is implemented and validated against a real libx264 round trip (see
 dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
 ```
 
-| Option                    | Default       | Description                                                 |
-| ------------------------- | ------------- | ----------------------------------------------------------- |
-| `--macroblock-size`, `-m` | `16`          | Macroblock size in pixels.                                  |
-| `--width`, `-w`           | `3840`        | Output video width.                                         |
-| `--height`, `-H`          | `2160`        | Output video height.                                        |
-| `--fps`, `-r`             | `60`          | Output framerate.                                           |
-| `--modulator`, `-M`       | `phase1`      | Modulation mode: `phase1`, `phase2`, `phase3`, or `phase4`. |
-| `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.             |
-| `--video-encoder`, `-E` | `libx264` | Video encoder: `libx264` (CPU baseline), `h264_qsv` (Intel Quick Sync), `h264_nvenc`/`h264_amf` (experimental). |
-| `--hwaccel` | `none` | Decode-side hardware acceleration for experiments: `none`, `qsv`, `cuda`, `d3d11va`. |
-| `--audio-clock`         | `false` | Mux an audio FSK datagram clock alongside the video.         |
-| `--durability`, `-D`    | `false` | Use the durability matrix: per-symbol hashes, XOR parity groups, and a stream manifest with SHA-256 whole-payload verification. Recommended for payloads larger than a few KB. |
+| Option                    | Default       | Description                                                                                                                                                                    |
+| ------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--macroblock-size`, `-m` | `16`          | Macroblock size in pixels.                                                                                                                                                     |
+| `--width`, `-w`           | `3840`        | Output video width.                                                                                                                                                            |
+| `--height`, `-H`          | `2160`        | Output video height.                                                                                                                                                           |
+| `--fps`, `-r`             | `60`          | Output framerate.                                                                                                                                                              |
+| `--modulator`, `-M`       | `phase1`      | Modulation mode: `phase1`, `phase2`, `phase3`, or `phase4`.                                                                                                                    |
+| `--ffmpeg-path`           | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                                                                                                                                |
+| `--video-encoder`, `-E`   | `libx264`     | Video encoder: `libx264` (CPU baseline), `h264_qsv` (Intel Quick Sync), `h264_nvenc`/`h264_amf` (experimental).                                                                |
+| `--hwaccel`               | `none`        | Decode-side hardware acceleration for experiments: `none`, `qsv`, `cuda`, `d3d11va`.                                                                                           |
+| `--audio-clock`           | `false`       | Mux an audio FSK datagram clock alongside the video.                                                                                                                           |
+| `--durability`, `-D`      | `false`       | Use the durability matrix: per-symbol hashes, XOR parity groups, and a stream manifest with SHA-256 whole-payload verification. Recommended for payloads larger than a few KB. |
 
 ### Decode
 
@@ -50,12 +50,12 @@ dotnet run --project YTAHD.Cli -- encode <input> <output> [options]
 dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 ```
 
-| Option              | Default       | Description                                                               |
-| ------------------- | ------------- | ------------------------------------------------------------------------- |
-| `--modulator`, `-M` | `phase1`      | Modulation mode used to create the video.                                 |
-| `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                           |
-| `--audio-clock`     | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count. |
-| `--durability`, `-D` | `false`      | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
+| Option               | Default       | Description                                                                                                                                                                                                  |
+| -------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--modulator`, `-M`  | `phase1`      | Modulation mode used to create the video.                                                                                                                                                                    |
+| `--ffmpeg-path`      | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                                                                                                                                                              |
+| `--audio-clock`      | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count.                                                                                                                                    |
+| `--durability`, `-D` | `false`       | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
 
 ### Reliability: use `--durability` for large payloads
 
@@ -133,12 +133,12 @@ dotnet run --project YTAHD.Cli -- encode input.bin output.mp4 --video-encoder h2
 
 Troubleshooting common GPU failures:
 
-| Symptom | Meaning | Fix |
-| --------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------- |
-| `Unknown encoder 'h264_qsv'` | FFmpeg build lacks the encoder | Use a full/gpl-shared FFmpeg build |
-| `OpenEncodeSessionEx failed: unsupported device` | Driver rejects the NVENC session (common on GeForce consumer GPUs for some builds) | Update drivers, or fall back to `libx264` |
-| `No device available for encoder` / probe failure | No usable GPU device for the requested profile | Run without `--video-encoder` (CPU baseline) |
-| `implied codec not found` / pixel-format errors | Encoder cannot accept the input pixel format | Keep the default `yuv420p` conversion path |
+| Symptom                                           | Meaning                                                                            | Fix                                          |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------- |
+| `Unknown encoder 'h264_qsv'`                      | FFmpeg build lacks the encoder                                                     | Use a full/gpl-shared FFmpeg build           |
+| `OpenEncodeSessionEx failed: unsupported device`  | Driver rejects the NVENC session (common on GeForce consumer GPUs for some builds) | Update drivers, or fall back to `libx264`    |
+| `No device available for encoder` / probe failure | No usable GPU device for the requested profile                                     | Run without `--video-encoder` (CPU baseline) |
+| `implied codec not found` / pixel-format errors   | Encoder cannot accept the input pixel format                                       | Keep the default `yuv420p` conversion path   |
 
 ### Current implementation status
 

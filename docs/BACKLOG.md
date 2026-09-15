@@ -13,7 +13,7 @@ parity group); 256 KB phase2 **silently truncates** (260378 of 262144 bytes, exi
 (`--durability`, CR-20260913-02) round-trips the same streams byte-exact with
 `integrity=passed` and is the supported path for large payloads.
 
-Open follow-up: the CLI knows the input file size at decode time but only *prints*
+Open follow-up: the CLI knows the input file size at decode time but only _prints_
 `payloadRecovered` — it should compare the two and exit non-zero on mismatch, turning the
 silent-truncation case into a loud failure even on the plain path. Not started.
 
