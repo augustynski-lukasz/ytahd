@@ -665,6 +665,30 @@ decoded from a single frame.
 | Relative capacity @4K (bytes/frame) | 1× (3,997)               | ~7.7× (30,863)               | ~30.9× (123,611)         | ~1.2× (4,835)             |
 | Physical frames / logical           | 3                        | 3                            | 3                        | 2 (displaced + canonical) |
 
+### 7.6 Configuration tiers (CR-20261003-02)
+
+The CLI surface is labeled in three tiers so a new user knows how much a combination has
+been validated. The model lives in `YTAHD.Cli/CliModeHierarchy.cs` (tested by
+`CliModeHierarchyTests`); the CLI's encode/decode summary reports the invocation's tier
+(`tier=`), and Tier-3 selections print a stderr warning.
+
+| Tier                   | Selections                                                                     | Evidence                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| **1 — Reference**    | `phase1` modulator, `libx264`, `--durability` on encode+decode                 | Full suite; 2703-frame plain-path round trip (`F-20260914-03`); durability byte-exact at 1 MB/4K (`F-20260914-01`) |
+| **2 — Validated**    | `phase2`–`phase4` modulators, `h264_qsv`, `--audio-clock`, explicit `--jobs` | `ParallelPipelineRealCodecTests`, `QsvRealCodecTests`, audio-clock real-codec validation (`F-20260903-02`)         |
+| **3 — Experimental** | `h264_nvenc`, `h264_amf`, `--hwaccel` (non-`none`)                             | Capability probing only; never held to the durability bar (`CR-20260912-06`)                                       |
+
+Rules:
+
+- The invocation tier is the **highest** tier exercised by any selection — one
+  experimental option makes the whole run experimental.
+- The "Recommended YouTube mode" tier is deliberately **empty** until the transit
+  evidence exists (`docs/ROADMAP.md` RM-01/RM-02).
+- **Every new CLI option must declare its tier** in its help text (`[tier: …]`) and in
+  this table, citing evidence. A new option without a tier is a docs bug.
+- Tier assignments are advisory labeling, not gating: no combination is rejected at parse
+  time. Any future gating decision needs its own ADR.
+
 ---
 
 ## 8. Durability layer — parity, recovery, integrity
@@ -880,11 +904,13 @@ repair, and early-stop behave the same either way.
    Decode from mean luminance `(R+G+B)/3`; never assume exact pixel values.
 4. **Register in the CLI** (`YTAHD.Cli/Program.cs`, `CreateModulator`) with a name and
    aliases.
-5. **Tests** (repo rule: regression test alongside the change): unit tests for the
+5. **Declare the tier** in `YTAHD.Cli/CliModeHierarchy.cs` (a new modulator defaults to
+   Tier 2 only after its real-FFmpeg validation lands) and in the §7.6 table.
+6. **Tests** (repo rule: regression test alongside the change): unit tests for the
    modulator/decoder pair, plus a real-FFmpeg round-trip test in `YTAHD.Tests`
    (synthetic-only is not sufficient for final verification).
-6. **ADR** `F-YYYYMMDD-NN-<slug>.md` in `docs/decisions/`, staged in the same commit.
-7. **Update this document** (§7 table + a new §7.x) in the same commit.
+7. **ADR** `F-YYYYMMDD-NN-<slug>.md` in `docs/decisions/`, staged in the same commit.
+8. **Update this document** (§7 table + a new §7.x) in the same commit.
 
 ### 12.2 Adding a protocol version (v3)
 

@@ -16,5 +16,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\YTAHD.Core\YTAHD.Core.csproj" />
+    <ProjectReference Include="..\YTAHD.Cli\YTAHD.Cli.csproj" />
   </ItemGroup>
 </Project>

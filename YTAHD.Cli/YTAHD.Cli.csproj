@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="CliModeHierarchy.cs" />
   </ItemGroup>
 
 </Project>

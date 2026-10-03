@@ -1,6 +1,35 @@
 # YouTube as a Hard Drive (YTAHD) - Binary to Video Pipeline
 
+> **What this is:** a research-grade, self-verifying binary-over-video transport/archive
+> experiment designed for lossy video-transcoding platforms. The name is a metaphor, not a
+> storage recommendation: "hard drive" implies durability, stable access, predictable cost,
+> privacy, and recoverability — none of which a video platform guarantees.
+>
+> **Research status:** what is validated today is byte-exact recovery over **local,
+> real-FFmpeg round-trips** (`libx264`/`h264_qsv`, including the durability matrix's
+> `integrity=passed` verification). Survival through an actual **YouTube upload → process →
+> retrieve cycle is not yet validated**; building that evidence is tracked in
+> `docs/ROADMAP.md` (Epic E1). Treat every result until then as experimental.
+
 [Buy me a coffee](https://buymeacoffee.com/augustynskh)
+
+## What this is NOT for
+
+Do not use YTAHD for any of the following — the channel cannot support these guarantees:
+
+- **Confidential or private data.** The payload is hidden only by obscurity inside a video;
+  there is no encryption and no access control. Anyone who obtains the video URL and this
+  (open-source) decoder can recover the bytes.
+- **The only copy of valuable data.** A lost, removed, or re-processed video means a lost
+  payload. Always keep the original elsewhere.
+- **Data requiring guaranteed retention or retrieval.** Videos can be removed,
+  region-blocked, re-encoded, or have representations withdrawn by the platform at any
+  time, without notice.
+- **Content that could violate platform rules.** If the video is taken down, the payload
+  goes with it.
+- **Storage with predictable effective cost, retrieval latency, or bandwidth.** Upload and
+  processing times, available renditions, and download throughput are outside this
+  project's control.
 
 ## Project Layout
 
@@ -21,9 +50,33 @@ dotnet run --project YTAHD.Cli -- decode output.mp4 recovered.bin --modulator ph
 ```
 
 Use the same `--modulator` value for encoding and decoding. Available modes are `phase1`,
-`phase2`, `phase3`, and `phase4`; the default is `phase1`. `phase4` (motion-vector
-modulation) is implemented and validated against a real libx264 round trip (see
-`docs/decisions/F-20260903-01-phase4-motion-vector-design.md`).
+`phase2`, `phase3`, and `phase4`; the default is `phase1` (the reference-tier carrier).
+`phase4` (motion-vector modulation) is implemented and validated against a real libx264
+round trip (see `docs/decisions/F-20260903-01-phase4-motion-vector-design.md`).
+
+### Configuration tiers (CR-20261003-02)
+
+Every CLI option belongs to one of three tiers so you always know how much a combination
+has been validated. The `tier=` field in the encode/decode summary reports the highest
+tier your invocation exercised, and experimental selections print a warning to stderr.
+
+| Tier                         | Meaning                                                                                                                                          | Options/selections                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| **1 — Reference**            | The one endorsed configuration: most observable, byte-exact locally, `integrity=passed` verification.                                            | `--modulator phase1`, `--video-encoder libx264`, `--durability` (encode **and** decode)            |
+| **2 — Validated extensions** | Real-codec evidence recorded, but narrower validation than Tier 1.                                                                               | `--modulator phase2/phase3/phase4`, `--video-encoder h264_qsv`, `--audio-clock`, explicit `--jobs` |
+| **3 — Experimental**         | Declared but not held to the durability bar; may fail on your driver/build.                                                                      | `--video-encoder h264_nvenc`, `h264_amf`, `--hwaccel` (any non-`none` value)                       |
+| Recommended YouTube mode     | **Not assigned yet.** Endorsing a transit configuration requires YouTube-upload evidence (`docs/ROADMAP.md` RM-01); no such evidence exists yet. | —                                                                                                  |
+
+The Tier-1 reference command:
+
+```powershell
+dotnet run --project YTAHD.Cli -- encode input.bin output.mp4 --modulator phase1 --durability
+dotnet run --project YTAHD.Cli -- decode output.mp4 recovered.bin --modulator phase1 --durability
+```
+
+Any combination _within_ a tier row above is at least as validated as its tier; mixing a
+Tier-1 option with a Tier-3 option makes the whole run experimental (that is what `tier=`
+reports).
 
 ### Encode
 
@@ -158,7 +211,11 @@ tuning follow-up — see `docs/BACKLOG.md`.
 The remaining backlog is maintenance, Phase 4 perf/docs polish (`docs/PLAN.md` stage A6), and
 the audio FSK clock (workstream B).
 
-A high-performance command-line utility implemented in C# that encodes any binary data (e.g., `.zip` files) into a 4K 60fps video stream optimized to survive YouTube's lossy compression algorithms (VP9/AV1), allowing files to be archived and retrieved directly from video hosting platforms.
+In one sentence: a high-performance command-line utility implemented in C# that encodes any
+binary data (e.g., `.zip` files) into a 4K 60fps video stream engineered to survive aggressive
+lossy video-transcoding pipelines of the kind YouTube deploys (VP9/AV1) — a self-verifying
+transport experiment, positioned for research and evaluation (see the positioning and
+suitability notes at the top of this README).
 
 ## Lessons Learned
 
@@ -182,7 +239,12 @@ To bypass these limitations, this project implements layout patterns and modulat
 
 ## 🛠️ System Architecture Principles
 
-To guarantee 100% data integrity upon decoding, the pipeline enforces the following physical boundaries:
+The pipeline enforces the following physical boundaries — these are the conditions under
+which byte-exact recovery is **achievable and verifiable** (proven by the
+`integrity=passed` SHA-256 manifest check when encoding and decoding with `--durability`).
+They are layout constraints, not a storage guarantee: the plain decode path is not
+guaranteed byte-exact for long streams (see _Reliability_ above), and platform transit
+remains unvalidated (`docs/ROADMAP.md` E1).
 
 - **Resolution:** Locked to **4K Ultra HD (3840×2160)**. YouTube allocates its highest premium bitrate profiles exclusively to 4K videos, deploying the superior VP9/AV1 engines.
 - **Framerate:** **60 FPS**. Higher framerates force YouTube to assign wider data streams compared to 24/30 FPS profiles.

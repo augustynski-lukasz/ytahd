@@ -4,6 +4,7 @@ using System.CommandLine.Invocation;
 using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
+using YTAHD.Cli;
 using YTAHD.Core.Application;
 using YTAHD.Core.Core;
 using YTAHD.Core.Infrastructure;
@@ -222,13 +223,13 @@ var optMacro = new Option<int>(new[] { "--macroblock-size", "-m" }, () => 16, "M
 var optWidth = new Option<int>(new[] { "--width", "-w" }, () => 3840, "Output video width");
 var optHeight = new Option<int>(new[] { "--height", "-H" }, () => 2160, "Output video height");
 var optFps = new Option<int>(new[] { "--fps", "-r" }, () => 60, "Output framerate");
-var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase3", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
+var optModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "[tier: reference (phase1) / validated (phase2-4)] Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'. Default phase1 = the reference tier (CR-20261003-02).");
 var optFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "-F" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
-var optAudioClock = new Option<bool>(new[] { "--audio-clock", "-A" }, () => false, "Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
+var optAudioClock = new Option<bool>(new[] { "--audio-clock", "-A" }, () => false, "[tier: validated] Add an audio FSK datagram clock track alongside the video (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 var optJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
-var optVideoEncoder = new Option<string>(new[] { "--video-encoder", "-E" }, () => "libx264", "Video encoder: 'libx264' (default CPU baseline), 'h264_qsv' (Intel Quick Sync), 'h264_nvenc' (NVIDIA, experimental), or 'h264_amf' (AMD, experimental). See docs/decisions/CR-20260912-06-gpu-acceleration-qsv-scoping.md.");
-var optHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
-var optDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "Use the durability matrix (CR-20260913-02): per-symbol hashes, XOR parity groups, and a stream manifest with SHA-256 whole-payload verification. Decode reports integrity=passed/failed/frame-only.");
+var optVideoEncoder = new Option<string>(new[] { "--video-encoder", "-E" }, () => "libx264", "[tier: reference (libx264) / validated (h264_qsv) / experimental (h264_nvenc, h264_amf)] Video encoder. See docs/decisions/CR-20261003-02-configuration-mode-hierarchy.md and CR-20260912-06-gpu-acceleration-qsv-scoping.md.");
+var optHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "[tier: experimental] Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
+var optDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "[tier: reference] Use the durability matrix (CR-20260913-02): per-symbol hashes, XOR parity groups, and a stream manifest with SHA-256 whole-payload verification. Decode reports integrity=passed/failed/frame-only.");
 encodeCommand.AddOption(optMacro);
 encodeCommand.AddOption(optWidth);
 encodeCommand.AddOption(optHeight);
@@ -280,6 +281,16 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
 
     var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
+    var invocationTier = CliModeHierarchy.ResolveInvocationTier(
+        CliModeHierarchy.ClassifyModulator(modulatorName),
+        CliModeHierarchy.ClassifyVideoEncoder(videoEncoder),
+        CliModeHierarchy.ClassifyHwaccel(hwaccel));
+    var experimentalWarning = CliModeHierarchy.ExperimentalWarning(videoEncoder, hwaccel);
+    if (experimentalWarning is not null)
+    {
+        Console.Error.WriteLine(experimentalWarning);
+    }
+
     var modulator = CreateModulator(modulatorName);
     Console.WriteLine($"Encode: {input} -> {output} [{width}x{height}@{fps}, MB={macroblockSize}, mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, encoder={FFmpegEncoderArguments.CodecName(videoEncoder)}, hwaccel={hwaccel}, audioClock={useAudioClock}, durability={useDurability}, parallelism={parallelism}] ");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath, videoEncoder));
@@ -303,7 +314,7 @@ encodeCommand.SetHandler(async (InvocationContext ctx) =>
 
     var metrics = service.LastEncodeMetrics;
     var actualVideoFrames = TryGetVideoFrameCount(output.FullName, ffmpegPath);
-    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}, parallelism={parallelism}, timingMs={{total={FormatMilliseconds(metrics.TotalElapsedMilliseconds)}, packetBuild={FormatMilliseconds(metrics.PacketBuildMilliseconds)}, render={FormatMilliseconds(metrics.FrameRenderMilliseconds)}, rgb={FormatMilliseconds(metrics.RgbConversionMilliseconds)}, ffmpegWrite={FormatMilliseconds(metrics.FfmpegWriteMilliseconds)}}}");
+    Console.WriteLine($"Encode summary: payload={payloadBytes} bytes, payloadPerFrame={metrics.PayloadBytesPerFrame}, dataFrames={metrics.TotalDataFrames}, framesWritten={metrics.TotalFramesWritten}, actualVideoFrames={actualVideoFrames}, parallelism={parallelism}, tier={invocationTier.ToString().ToLowerInvariant()}, timingMs={{total={FormatMilliseconds(metrics.TotalElapsedMilliseconds)}, packetBuild={FormatMilliseconds(metrics.PacketBuildMilliseconds)}, render={FormatMilliseconds(metrics.FrameRenderMilliseconds)}, rgb={FormatMilliseconds(metrics.RgbConversionMilliseconds)}, ffmpegWrite={FormatMilliseconds(metrics.FfmpegWriteMilliseconds)}}}");
 });
 
 var decodeIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
@@ -311,12 +322,12 @@ var decodeOut = new Argument<FileInfo>("output") { Arity = ArgumentArity.Exactly
 var decodeCommand = new Command("decode", "Decode a video back into a binary file");
 decodeCommand.AddArgument(decodeIn);
 decodeCommand.AddArgument(decodeOut);
-var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode: 'phase1', 'phase2', 'phase3', or 'phase4'");
-var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "--ffpmeg-path" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
-var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
+var decodeModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "[tier: reference (phase1) / validated (phase2-4)] Modulation mode used to create the video: 'phase1', 'phase2', 'phase3', or 'phase4'.");
+var decodeFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "-F" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
+var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, "[tier: validated] Cross-check the audio FSK datagram clock against the decoded video frame count (see docs/decisions/F-20260903-02-audio-fsk-clock-design.md).");
 var decodeJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
-var decodeHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
-var decodeDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "Enable durability-matrix reconstruction (CR-20260913-02): hole-tolerant multi-erasure repair with a loss map; requires the stream to have been encoded with --durability.");
+var decodeHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "[tier: experimental] Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
+var decodeDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "[tier: reference] Enable durability-matrix reconstruction (CR-20260913-02): hole-tolerant multi-erasure repair with a loss map; requires the stream to have been encoded with --durability.");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);
 decodeCommand.AddOption(decodeAudioClock);
@@ -350,6 +361,17 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
 
     var parallelism = FormatParallelism(requestedJobs, ParallelismPolicy.Resolve(requestedJobs));
 
+    var invocationTier = CliModeHierarchy.ResolveInvocationTier(
+        CliModeHierarchy.ClassifyModulator(modulatorName),
+        // Encode-side video encoder does not participate in decode; only hwaccel + modulator count here.
+        ConfigurationTier.Validated,
+        CliModeHierarchy.ClassifyHwaccel(hwaccel));
+    var experimentalWarning = CliModeHierarchy.ExperimentalWarning(VideoEncoder.LibX264, hwaccel);
+    if (experimentalWarning is not null)
+    {
+        Console.Error.WriteLine(experimentalWarning);
+    }
+
     var modulator = CreateModulator(modulatorName);
     Console.WriteLine($"Decode: {input} -> {output} [mode={modulatorName}, ffmpeg={ffmpegPath ?? "PATH"}, hwaccel={hwaccel}, audioClock={useAudioClock}, durability={useDurability}, parallelism={parallelism}]");
     var service = new YtahdCodecService(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath));
@@ -370,7 +392,7 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var outputBytes = File.Exists(output.FullName) ? new FileInfo(output.FullName).Length : 0;
     var totalVideoFrames = TryGetVideoFrameCount(input.FullName, ffmpegPath);
     var completionPercentage = totalVideoFrames > 0 ? Math.Min(100d, decodeMetrics.TotalFramesSeen * 100d / totalVideoFrames).ToString("F1", CultureInfo.InvariantCulture) + "%" : "n/a";
-    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, parallelism={parallelism}, integrity={decodeMetrics.IntegrityStatus.ToString().ToLowerInvariant()}, quality={FormatQualityVerdict(decodeMetrics)}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
+    Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, parallelism={parallelism}, integrity={decodeMetrics.IntegrityStatus.ToString().ToLowerInvariant()}, quality={FormatQualityVerdict(decodeMetrics)}, tier={invocationTier.ToString().ToLowerInvariant()}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
 });
 
 root.AddCommand(encodeCommand);
