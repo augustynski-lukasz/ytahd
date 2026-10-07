@@ -431,4 +431,56 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
 root.AddCommand(encodeCommand);
 root.AddCommand(decodeCommand);
 
+// RM-13 (CR-20261007-02): machine-readable stream triage. Inspect decodes the video's frame
+// packets WITHOUT assembling a payload: it reports the recovered manifest, frame geometry,
+// packet statistics, and integrity state as JSON so tooling can triage a stream
+// programmatically. Exit code: 0 when a manifest was recovered and reconciles, 1 otherwise.
+var inspectIn = new Argument<FileInfo>("input") { Arity = ArgumentArity.ExactlyOne };
+var inspectCommand = new Command("inspect", "Emit machine-readable JSON describing a YTAHD-encoded video (no payload assembly)");
+inspectCommand.AddArgument(inspectIn);
+var inspectFfmpegPath = new Option<string?>(new[] { "--ffmpeg-path", "-F" }, () => null, "Optional explicit path to ffmpeg.exe or its directory; defaults to PATH lookup when omitted.");
+var inspectModulator = new Option<string>(new[] { "--modulator", "-M" }, () => "phase1", "Modulation mode used to create the video: 'phase1', 'phase2', 'phase3', or 'phase4'.");
+var inspectJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
+inspectCommand.AddOption(inspectFfmpegPath);
+inspectCommand.AddOption(inspectModulator);
+inspectCommand.AddOption(inspectJobs);
+inspectCommand.SetHandler(async (InvocationContext ctx) =>
+{
+    var input = ctx.ParseResult.GetValueForArgument(inspectIn);
+    var ffmpegPath = ctx.ParseResult.GetValueForOption(inspectFfmpegPath);
+    var modulatorName = ctx.ParseResult.GetValueForOption(inspectModulator) ?? "phase1";
+    var jobs = ctx.ParseResult.GetValueForOption(inspectJobs);
+
+    if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
+    {
+        Console.Error.WriteLine(jobsError);
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    if (!input.Exists)
+    {
+        Console.Error.WriteLine($"Input video not found: {input}");
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    var modulator = CreateModulator(modulatorName);
+    var engine = new DecoderEngine(modulator, new DefaultFFmpegWrapperFactory(ffmpegPath).CreateForDecode());
+    var report = await engine.InspectAsync(input.FullName);
+
+    var json = System.Text.Json.JsonSerializer.Serialize(report, new System.Text.Json.JsonSerializerOptions
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+    });
+    Console.WriteLine(json);
+
+    // Triage verdict: a reconciled manifest proves the stream is a YTAHD v2 durability
+    // stream and gives tooling an authoritative expected payload size.
+    ctx.ExitCode = report.Manifest is not null ? 0 : 1;
+});
+
+root.AddCommand(inspectCommand);
+
 return await root.InvokeAsync(args);

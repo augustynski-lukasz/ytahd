@@ -327,5 +327,185 @@ namespace YTAHD.Core.Core
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
         }
+
+        /// <summary>
+        /// Machine-readable stream triage (RM-13, CR-20261007-02): decode the video's frame
+        /// packets WITHOUT assembling a payload and report what the stream reveals — recovered
+        /// manifest, packet statistics, geometry, and loss indicators. Reuses the same ffmpeg
+        /// pipe + frame-bit-decoder path as a real decode so the report reflects what a decode
+        /// would see, at a fraction of the cost (no payload buffer, no aggregation).
+        /// </summary>
+        public async Task<InspectReport> InspectAsync(string inputVideo, CancellationToken cancellationToken = default)
+        {
+            if (!File.Exists(inputVideo))
+                throw new FileNotFoundException("Input video not found", inputVideo);
+
+            var report = new InspectReport { InputVideo = inputVideo, ModulatorId = _modulator.GetType().Name };
+            var (width, height, fps) = await GetVideoMetadataAsync(inputVideo);
+            report.Width = width;
+            report.Height = height;
+            report.Fps = fps;
+            report.TotalVideoFrames = await FFmpegProbe.GetVideoFrameCountAsync(inputVideo, _ffmpeg.ExecutablePath);
+
+            var ffmpegPath = _ffmpeg.ExecutablePath;
+            if (string.IsNullOrWhiteSpace(ffmpegPath) || ffmpegPath.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                ffmpegPath = "ffmpeg";
+            }
+
+            var args = BuildDecodeArguments(inputVideo, width, height, fps, _hardwareAcceleration);
+            var psi = new ProcessStartInfo(ffmpegPath, args)
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true
+            };
+
+            using var child = ChildProcessScope.Start(psi, "Failed to start ffmpeg for inspect.");
+            var process = child.Process;
+            process.StandardInput.Close();
+            var stderrDrain = ChildProcessPipes.DrainAsync(process.StandardError);
+
+            using (var rgbStream = new ChildPipeStream(process.StandardOutput.BaseStream))
+            {
+                await InspectFromRgbStreamAsync(rgbStream, width, height, report, cancellationToken);
+            }
+
+            await process.WaitForExitAsync();
+            await stderrDrain;
+            return report;
+        }
+
+        private async Task InspectFromRgbStreamAsync(Stream rgbStream, int width, int height, InspectReport report, CancellationToken cancellationToken)
+        {
+            var geometry = new ModulatorGeometry(width, height, _macroblockSize, HeaderBytes, BitsPerFrame: 0);
+            int borderWidth = _modulator.GetBorderWidth(geometry);
+            geometry = geometry with { BorderWidth = borderWidth };
+            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(geometry);
+            if (payloadBytesPerFrame <= 0)
+                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
+
+            int rowBytes = width * 3;
+            int frameBytes = rowBytes * height;
+            int blocksX = width / _macroblockSize;
+            int blocksY = height / _macroblockSize;
+            int bitsPerFrame = blocksX * blocksY;
+
+            var frameBitDecoder = FrameBitDecoderFactory.CreateForModulator(_modulator);
+            byte[] frameBuf = new byte[frameBytes];
+            var dataIndices = new SortedSet<int>();
+            var declaredTotals = new SortedSet<int>();
+            var payloadLengths = new SortedSet<int>();
+            var manifests = new List<StreamManifest>();
+            var manifestChunks = new Dictionary<bool, Dictionary<int, byte[]>>();
+            bool seenSymbolFrame = false;
+
+            while (true)
+            {
+                int read = 0;
+                while (read < frameBytes)
+                {
+                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read, cancellationToken);
+                    if (r == 0) break;
+                    read += r;
+                }
+
+                if (read < frameBytes) break;
+                report.FramesSeen++;
+
+                if (frameBitDecoder.IsCanonicalFrameMemory(frameBuf, width, height, borderWidth))
+                {
+                    report.CanonicalFrameCount++;
+                    continue;
+                }
+
+                if (!DecoderEngine.TryReadDecodedPacket(frameBuf, width, height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet))
+                {
+                    report.InvalidPacketCount++;
+                    continue;
+                }
+
+                if (!FramePacketCodec.TryDecode(packet, out var frameType, out var frameIndex, out var totalDataFrames, out var groupStart, out var groupCount, out var payloadLength, out var payload))
+                {
+                    report.InvalidPacketCount++;
+                    continue;
+                }
+
+                report.PacketCount++;
+                report.PayloadBytesPerFrame = payloadBytesPerFrame;
+                declaredTotals.Add(totalDataFrames);
+
+                switch (frameType)
+                {
+                    case FrameTypeData:
+                        report.DataPacketCount++;
+                        dataIndices.Add(frameIndex);
+                        break;
+                    case FrameTypeParity:
+                        report.ParityPacketCount++;
+                        break;
+                    case FramePacket.FrameTypeManifest:
+                        report.ManifestPacketCount++;
+                        var copyKey = !seenSymbolFrame;
+                        if (!manifestChunks.TryGetValue(copyKey, out var chunkList))
+                        {
+                            chunkList = new Dictionary<int, byte[]>();
+                            manifestChunks[copyKey] = chunkList;
+                        }
+                        chunkList.TryAdd(frameIndex, payload);
+                        break;
+                }
+
+                seenSymbolFrame = true;
+            }
+
+            if (declaredTotals.Count > 0)
+            {
+                report.DeclaredTotalDataFrames = declaredTotals.Min;
+            }
+
+            report.DistinctDataFrameIndices = dataIndices.Count;
+            if (dataIndices.Count > 0)
+            {
+                var missing = new List<int>();
+                for (int i = 0; i <= System.Linq.Enumerable.Max(dataIndices); i++)
+                {
+                    if (!dataIndices.Contains(i)) missing.Add(i);
+                }
+                report.MissingDataFrameIndices = missing;
+            }
+
+            // Reconcile manifest copies exactly like the durability decode (CR-20260912-05):
+            // reassemble each copy's chunks, then require agreement.
+            var reassembled = new List<StreamManifest>();
+            foreach (var chunkList in manifestChunks.Values)
+            {
+                if (chunkList.Count == 0) continue;
+                var ordered = chunkList.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToArray();
+                var body = ordered.Length == 1 ? ordered[0] : ordered.SelectMany(c => c).ToArray();
+                if (StreamManifestCodec.TryDeserialize(body, out var manifest) && manifest is not null)
+                {
+                    reassembled.Add(manifest);
+                }
+            }
+
+            if (reassembled.Count > 0)
+            {
+                report.Manifest = reassembled[0];
+                if (reassembled.Count > 1)
+                {
+                    var first = reassembled[0];
+                    report.ManifestCopiesAgree = reassembled.All(m =>
+                        m.TotalPayloadBytes == first.TotalPayloadBytes
+                        && m.PayloadSha256.AsSpan().SequenceEqual(first.PayloadSha256)
+                        && m.DataFrameCount == first.DataFrameCount
+                        && m.ModulatorId == first.ModulatorId);
+                }
+            }
+
+            report.LooksLikeYtahdStream = report.PacketCount > 0;
+        }
     }
 }

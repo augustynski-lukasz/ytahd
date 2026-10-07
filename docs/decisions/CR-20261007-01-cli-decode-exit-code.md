@@ -26,7 +26,7 @@ evaluated **after** the summary line is printed (diagnostics stay on stdout):
    payload size; when set and the written output size differs → exit 1. On the plain path
    there is no manifest, so the caller-supplied expected size is the only authoritative
    truncation guard. This replaces the BACKLOG idea of comparing against "the input file
-   size" — the decode input is the *video*, whose size is unrelated to the payload size,
+   size" — the decode input is the _video_, whose size is unrelated to the payload size,
    so an explicit option is the correct contract.
 3. **Audio-clock datagram mismatch**: when `--audio-clock` reports more datagrams than
    logical frames recovered (beyond tolerance) → exit 1, since frames were likely lost
@@ -69,7 +69,7 @@ The plain path additionally had no expected-size source at all
 
 - Scripts/CI can now trust the decode exit code on both paths.
 - The plain path remains limited (no whole-payload verification without a manifest);
-  `--expected-bytes` only catches *length* truncation, not same-length corruption —
+  `--expected-bytes` only catches _length_ truncation, not same-length corruption —
   `--durability` remains the endorsed path for anything beyond a few KB.
 - `--expected-bytes` is advisory input, not protocol state; no wire-format change.
 - Follow-up (not scheduled): plumb the manifest's `TotalPayloadBytes` into the plain path

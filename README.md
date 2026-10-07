@@ -117,7 +117,27 @@ dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 | `--modulator`, `-M`  | `phase1`      | Modulation mode used to create the video.                                                                                                                                                                    |
 | `--ffmpeg-path`      | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                                                                                                                                                              |
 | `--audio-clock`      | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count.                                                                                                                                    |
-| `--durability`, `-D` | `false`       | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. || `--expected-bytes` | — | Expected original payload size in bytes. Decode exits non-zero if the recovered output size differs — the only guard against silent truncation on the plain path (no manifest there). |
+| `--durability`, `-D` | `false` | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
+| `--expected-bytes` | — | Expected original payload size in bytes. Decode exits non-zero if the recovered output size differs — the only guard against silent truncation on the plain path (no manifest there). |
+
+### Inspect
+
+```text
+dotnet run --project YTAHD.Cli -- inspect <input> [options]
+```
+
+Emits machine-readable JSON describing a YTAHD-encoded video **without assembling the
+payload** (RM-13): recovered stream manifest, packet statistics (data/parity/manifest
+counts, invalid packets), frame geometry, declared vs recovered data-frame counts, and
+missing data-frame indices. Exit code 0 when a manifest was recovered and its copies
+agree, 1 otherwise — so scripts can triage a stream before committing to a full decode.
+
+| Option | Default | Description |
+| -------------------- | ------------- | ------------------------------------------------------------ |
+| `--modulator`, `-M` | `phase1` | Modulation mode used to create the video. |
+| `--ffmpeg-path` | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory. |
+| `--jobs`, `-j` | `auto` | Degree of parallelism (same semantics as decode). |
+
 ### Reliability: use `--durability` for large payloads
 
 The default (plain) decode path uses simple XOR parity that can recover **one** lost frame

@@ -33,7 +33,7 @@ The central promise is not "encode/decode a locally generated FFmpeg file" — i
 _encode → upload → YouTube processing → retrieve → decode, repeatably_. Nothing in the
 repo currently validates that last mile.
 
-### RM-01 — YouTube transit validation harness (P1, open)
+### RM-01 — YouTube transit validation harness (P1, in-progress — harness scaffolded CR-20261007-03)
 
 **Story:** As a maintainer, I want a canonical, repeatable YouTube transit validation
 harness so that the core claim is backed by published evidence instead of local round-trips.
@@ -223,7 +223,7 @@ independent of payload size so that archival-scale recovery is feasible at all.
 
 ## E6 — Compatibility & tooling (P2)
 
-### RM-11 — Golden-vector fixtures per wire-format version (P2, open)
+### RM-11 — Golden-vector fixtures per wire-format version (P2, done — CR-20261007-02)
 
 **Story:** As a maintainer, I want small known payload → encoded frame/packet → expected
 decoded bytes fixtures so that wire-format regressions are caught byte-exactly.
@@ -240,7 +240,7 @@ releases so that compatibility is proven against history, not just the current p
   job.
 - **Acceptance:** at least the previous tagged release's fixtures decode correctly.
 
-### RM-13 — Machine-readable `ytahd inspect` (P2, open)
+### RM-13 — Machine-readable `ytahd inspect` (P2, done — CR-20261007-02)
 
 **Story:** As a user/tooling author, I want an `inspect` command emitting JSON (protocol
 version, modulator, frame geometry, payload size, integrity state, decoder confidence,

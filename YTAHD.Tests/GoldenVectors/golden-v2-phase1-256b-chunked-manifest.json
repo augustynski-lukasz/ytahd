@@ -1,0 +1,37 @@
+{
+  "description": "YTAHD golden vector (RM-11). packets.hex = one hex packet per line; payload.hex = the expected decoded payload.",
+  "protocolVersion": 2,
+  "payloadBytes": 256,
+  "payloadSha256": "2f3dedcc98287a3ee6898b44bc78b78e0b2b48bb4cba87fcb9a43bd583eb5a7b",
+  "packetCount": 14,
+  "manifestFrameCount": 4,
+  "symbolSize": 32,
+  "groupSize": 4,
+  "paritySymbolsPerGroup": 1,
+  "maxPayloadBytesPerFrame": 64,
+  "manifest": {
+    "Version": 1,
+    "TotalPayloadBytes": 256,
+    "payloadSha256": "2f3dedcc98287a3ee6898b44bc78b78e0b2b48bb4cba87fcb9a43bd583eb5a7b",
+    "ModulatorId": "phase1",
+    "Width": 640,
+    "Height": 480,
+    "MacroblockSize": 16,
+    "Fps": 30,
+    "DataFrameCount": 8,
+    "ParityGroupSize": 4,
+    "ParitySymbolsPerGroup": 1,
+    "UseDurabilityMatrix": true
+  },
+  "firstDataFrameHeader": {
+    "magic": "5954",
+    "version": 2,
+    "frameType": 0,
+    "frameIndex": 0,
+    "totalDataFrames": 8,
+    "groupStart": 0,
+    "groupCount": 4,
+    "payloadLength": 32,
+    "headerBytes": 53
+  }
+}

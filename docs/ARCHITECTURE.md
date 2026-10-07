@@ -24,6 +24,7 @@ to write an independent decoder.
 5. [Frame packet wire format (byte-exact)](#5-frame-packet-wire-format-byte-exact)
 6. [Stream manifest wire format (byte-exact)](#6-stream-manifest-wire-format-byte-exact)
 7. [Modulation algorithms (Phase 1–4) — math and pixel layout](#7-modulation-algorithms-phase-14--math-and-pixel-layout)
+   - [7.7 `inspect` — machine-readable stream triage](#77-inspect--machine-readable-stream-triage-cR-20261007-02)
 8. [Durability layer — parity, recovery, integrity](#8-durability-layer--parity-recovery-integrity)
 9. [Audio FSK datagram clock](#9-audio-fsk-datagram-clock)
 10. [Decoder tolerance contract](#10-decoder-tolerance-contract)
@@ -688,6 +689,39 @@ Rules:
   this table, citing evidence. A new option without a tier is a docs bug.
 - Tier assignments are advisory labeling, not gating: no combination is rejected at parse
   time. Any future gating decision needs its own ADR.
+
+### 7.7 `inspect` — machine-readable stream triage (CR-20261007-02)
+
+`ytahd inspect <input>` decodes the video's frame packets **without assembling a payload**
+and emits a JSON `InspectReport` (`YTAHD.Core/Core/InspectReport.cs`). It reuses the same
+ffmpeg pipe + frame-bit-decoder path as a real decode, so the report reflects what a
+decode would see, at a fraction of the cost. Exit code: `0` when a manifest was recovered
+and its copies agree, `1` otherwise.
+
+JSON schema (camelCase keys):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `inputVideo` | string | Path as inspected. |
+| `width` / `height` / `fps` | int | Container geometry probed by ffprobe (0 when probing failed). |
+| `totalVideoFrames` | int | Total video frames in the container (0 when probing failed). |
+| `modulatorId` | string | Modulator class used to decode the packets. |
+| `packetCount` | int | Strictly-valid packets recovered (data + parity + manifest). |
+| `dataPacketCount` / `parityPacketCount` / `manifestPacketCount` | int | Per-type packet counts. |
+| `invalidPacketCount` | int | Frames that produced no valid packet (lossy-drift or loss candidates). |
+| `canonicalFrameCount` | int | Canonical separator frames seen (phase4 datagram boundaries). |
+| `framesSeen` | int | Total video frames read from the container. |
+| `declaredTotalDataFrames` | int | Protocol-declared total from packet headers (0 when none seen). |
+| `distinctDataFrameIndices` | int | Distinct data frame indices recovered. |
+| `missingDataFrameIndices` | int[] | Indices missing between 0 and the highest recovered index. |
+| `manifest` | object \| null | The reconciled stream manifest (same fields as §6). |
+| `manifestCopiesAgree` | bool \| null | Whether start/end manifest copies agree (null when < 2 copies). |
+| `payloadBytesPerFrame` | int | Per-frame payload capacity implied by the geometry. |
+| `looksLikeYtahdStream` | bool | True when at least one packet parsed strictly. |
+
+Manifest reconciliation follows the durability decode exactly (§6): each copy's chunks
+are reassembled separately and conflicting copies are reported via
+`manifestCopiesAgree = false` rather than silently picking one.
 
 ---
 
