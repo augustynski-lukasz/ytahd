@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.CommandLine;
 using System.CommandLine.Invocation;
 using System.Globalization;
@@ -328,12 +329,14 @@ var decodeAudioClock = new Option<bool>(new[] { "--audio-clock" }, () => false, 
 var decodeJobs = new Option<string>(new[] { "--jobs", "-j" }, () => "auto", JobsOptionHelp);
 var decodeHwaccel = new Option<string>(new[] { "--hwaccel" }, () => "none", "[tier: experimental] Decode-side hardware acceleration for experiments: 'none' (default), 'qsv', 'cuda', or 'd3d11va'.");
 var decodeDurability = new Option<bool>(new[] { "--durability", "-D" }, () => false, "[tier: reference] Enable durability-matrix reconstruction (CR-20260913-02): hole-tolerant multi-erasure repair with a loss map; requires the stream to have been encoded with --durability.");
+var decodeExpectedBytes = new Option<int?>(new[] { "--expected-bytes" }, () => null, "[tier: reference] Expected original payload size in bytes. When set, decode exits non-zero if the recovered output size differs — the plain path has no manifest, so this is the only guard against silent truncation (RM-03 / CR-20261007-01).");
 decodeCommand.AddOption(decodeModulator);
 decodeCommand.AddOption(decodeFfmpegPath);
 decodeCommand.AddOption(decodeAudioClock);
 decodeCommand.AddOption(decodeJobs);
 decodeCommand.AddOption(decodeHwaccel);
 decodeCommand.AddOption(decodeDurability);
+decodeCommand.AddOption(decodeExpectedBytes);
 decodeCommand.SetHandler(async (InvocationContext ctx) =>
 {
     var input = ctx.ParseResult.GetValueForArgument(decodeIn);
@@ -344,6 +347,7 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var jobs = ctx.ParseResult.GetValueForOption(decodeJobs);
     var hwaccelValue = ctx.ParseResult.GetValueForOption(decodeHwaccel);
     var useDurability = ctx.ParseResult.GetValueForOption(decodeDurability);
+    var expectedBytes = ctx.ParseResult.GetValueForOption(decodeExpectedBytes);
 
     if (!TryParseJobs(jobs, out var requestedJobs, out var jobsError))
     {
@@ -393,6 +397,35 @@ decodeCommand.SetHandler(async (InvocationContext ctx) =>
     var totalVideoFrames = TryGetVideoFrameCount(input.FullName, ffmpegPath);
     var completionPercentage = totalVideoFrames > 0 ? Math.Min(100d, decodeMetrics.TotalFramesSeen * 100d / totalVideoFrames).ToString("F1", CultureInfo.InvariantCulture) + "%" : "n/a";
     Console.WriteLine($"Decode summary: framesSeen={decodeMetrics.TotalFramesSeen}, totalVideoFrames={totalVideoFrames}, completion={completionPercentage}, framesDecoded={decodeMetrics.TotalFramesDecoded}, payloadRecovered={decodeMetrics.TotalDecodedPayloadBytes} bytes, outputBytes={outputBytes}, parallelism={parallelism}, integrity={decodeMetrics.IntegrityStatus.ToString().ToLowerInvariant()}, quality={FormatQualityVerdict(decodeMetrics)}, tier={invocationTier.ToString().ToLowerInvariant()}, audioDatagramCount={decodeMetrics.AudioDatagramCount?.ToString() ?? "n/a"}, audioVideoMismatch={decodeMetrics.HasAudioVideoDatagramMismatch()?.ToString() ?? "n/a"}, timingMs={{total={FormatMilliseconds(decodeMetrics.TotalElapsedMilliseconds)}, read={FormatMilliseconds(decodeMetrics.FrameReadMilliseconds)}, packetDecode={FormatMilliseconds(decodeMetrics.PacketDecodeMilliseconds)}, aggregation={FormatMilliseconds(decodeMetrics.AggregationMilliseconds)}}}");
+
+    // RM-03 (CR-20261007-01): a decode that recovered untrustworthy bytes must not exit 0.
+    // The summary above stays on stdout for diagnostics; the failure is surfaced on stderr
+    // and the exit code turns non-zero so scripts and CI stop on it.
+    var failureReasons = new List<string>();
+    if (decodeMetrics.IntegrityStatus == IntegrityStatus.Failed)
+    {
+        failureReasons.Add($"integrity=failed: recovered payload does not match the stream manifest (declared {decodeMetrics.Manifest?.TotalPayloadBytes ?? -1} bytes); the output is NOT trustworthy.");
+    }
+
+    if (expectedBytes is int expected && expected >= 0 && outputBytes != expected)
+    {
+        failureReasons.Add($"outputBytes={outputBytes} differs from the expected payload size {expected} — the plain path can silently truncate (no manifest); re-decode with --durability if the stream was encoded with it.");
+    }
+
+    if (decodeMetrics.HasAudioVideoDatagramMismatch() == true)
+    {
+        failureReasons.Add($"audio-clock mismatch: {decodeMetrics.AudioDatagramCount} audio datagrams vs {decodeMetrics.TotalRecoveredLogicalFrames} recovered logical frames — frames were likely lost.");
+    }
+
+    if (failureReasons.Count > 0)
+    {
+        foreach (var reason in failureReasons)
+        {
+            Console.Error.WriteLine($"Decode FAILED: {reason}");
+        }
+
+        ctx.ExitCode = 1;
+    }
 });
 
 root.AddCommand(encodeCommand);

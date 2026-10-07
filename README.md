@@ -44,6 +44,15 @@ Do not use YTAHD for any of the following — the channel cannot support these g
 
 Run commands from the repository root. The CLI resolves `ffmpeg` from `PATH` by default.
 
+> **⚠️ Plain-path caveat (long streams):** without `--durability` the decode has no
+> whole-payload verification, and over long streams (hundreds of data frames) lossy
+> encoding can accumulate bit errors the simple XOR parity cannot repair — in the worst
+> case the decode returns a **silently truncated payload with exit code 0**
+> (see `docs/decisions/F-20260914-03-long-stream-regression-coverage.md`). For any payload
+> beyond a few KB, encode **and** decode with `--durability`. On the plain path, pass
+> `--expected-bytes <original size>` to decode so a truncated recovery exits non-zero
+> instead of failing silently.
+
 ```powershell
 dotnet run --project YTAHD.Cli -- encode input.bin output.mp4 --modulator phase3
 dotnet run --project YTAHD.Cli -- decode output.mp4 recovered.bin --modulator phase3
@@ -108,8 +117,7 @@ dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 | `--modulator`, `-M`  | `phase1`      | Modulation mode used to create the video.                                                                                                                                                                    |
 | `--ffmpeg-path`      | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                                                                                                                                                              |
 | `--audio-clock`      | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count.                                                                                                                                    |
-| `--durability`, `-D` | `false`       | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
-
+| `--durability`, `-D` | `false`       | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. || `--expected-bytes` | — | Expected original payload size in bytes. Decode exits non-zero if the recovered output size differs — the only guard against silent truncation on the plain path (no manifest there). |
 ### Reliability: use `--durability` for large payloads
 
 The default (plain) decode path uses simple XOR parity that can recover **one** lost frame

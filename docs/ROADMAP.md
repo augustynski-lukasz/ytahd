@@ -61,7 +61,7 @@ path without guessing options.
 - **Acceptance:** a reader can copy-paste the chain and know exactly what is and is not
   guaranteed.
 
-### RM-03 — Promote the long-stream plain-path caveat (P1, open)
+### RM-03 — Promote the long-stream plain-path caveat (P1, done — CR-20261007-01)
 
 **Story:** As a user, I want the plain-path limitation and the role/cost of `--durability`
 stated up front (README Quick Start + CLI output) so that I don't discover it via my first
