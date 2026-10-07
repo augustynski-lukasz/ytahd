@@ -63,9 +63,9 @@ public static class CliModeHierarchy
     {
         return acceleration switch
         {
-            // 'none' is not an experimental selection; the tier it contributes is the
-            // neutral/validated baseline. Decode acceleration itself is Tier 3 below.
-            HardwareAcceleration.None => ConfigurationTier.Validated,
+            // 'none' contributes no experimental selection; the neutral baseline is
+            // the reference tier. Decode acceleration itself is Tier 3 below.
+            HardwareAcceleration.None => ConfigurationTier.Reference,
 
             // Tier 3: decode-side acceleration is probe-guarded at best; decode-side
             // capability probing is a known gap (Review 1, R2 follow-up).

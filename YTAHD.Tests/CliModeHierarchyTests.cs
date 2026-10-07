@@ -47,7 +47,7 @@ public class CliModeHierarchyTests
     }
 
     [Theory]
-    [InlineData(HardwareAcceleration.None, ConfigurationTier.Validated)]
+    [InlineData(HardwareAcceleration.None, ConfigurationTier.Reference)]
     [InlineData(HardwareAcceleration.Qsv, ConfigurationTier.Experimental)]
     [InlineData(HardwareAcceleration.Cuda, ConfigurationTier.Experimental)]
     [InlineData(HardwareAcceleration.D3D11Va, ConfigurationTier.Experimental)]

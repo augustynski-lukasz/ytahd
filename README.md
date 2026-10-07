@@ -367,8 +367,19 @@ The transport layer combines two complementary protections above the frame/packe
 by durability window; each group carries an XOR parity symbol so a single missing frame per
 group is rebuilt at decode. The matrix is integrated into the live service path — enable it
 with `VideoCodecOptions.UseDurabilityMatrix` (service API) and it is exercised by the
-real-FFmpeg regression tests. The runtime API stays replaceable for future fountain-style
-expansion.
+real-FFmpeg regression tests.
+
+> **What the durability matrix guarantees — and what it does not** (CR-20261006-01):
+>
+> - **Proven:** with the default configuration (groups of 4 symbols, 1 parity symbol per
+>   group), up to **one missing symbol per group** is reconstructed. Wholly-lost groups
+>   become zero-filled holes surfaced in the loss map — and `integrity=failed` fails
+>   loudly; the output is never silently accepted as correct. Whole-payload correctness is
+>   **proven** by the manifest SHA-256 (`integrity=passed`), not assumed.
+> - **Not implemented:** fountain codes, Reed–Solomon, or general erasure coding. There is
+>   no selectable "fountain" mode — the extension seam is `IDataDurabilityCodec`
+>   (ARCHITECTURE.md §12.3); a future scheme lands with its own implementation, tests, and
+>   ADR.
 
 **Integrity verification** (ADR `CR-20260912-05-integrity-durability-combination.md`). Three
 levels of proof, each closing a different silent-failure hole:

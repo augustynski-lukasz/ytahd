@@ -132,9 +132,10 @@ tier model (Reference / Validated / Experimental), `[tier: …]` labels on every
 `tier=` field in encode/decode summaries, stderr warnings for Tier-3 selections (nvenc/amf/
 --hwaccel), encode `--modulator` default aligned to `phase1` (was phase3, contradicted docs),
 `--ffpmeg-path` typo alias removed, README "Configuration tiers" section + ARCHITECTURE §7.6
-+ §12 checklist step, `CliModeHierarchyTests` (36 tests). The "Recommended YouTube mode" slot
-is deliberately **empty** pending RM-01 evidence. NOTE: the `--ffpmeg-path` alias removal is
-the only breaking change; ADR default-change (encode `--modulator` phase3→phase1) called out.
+
+- §12 checklist step, `CliModeHierarchyTests` (36 tests). The "Recommended YouTube mode" slot
+  is deliberately **empty** pending RM-01 evidence. NOTE: the `--ffpmeg-path` alias removal is
+  the only breaking change; ADR default-change (encode `--modulator` phase3→phase1) called out.
 
 ### RM-07 — Define the three-tier mode hierarchy (P2, done — CR-20261003-02)
 
@@ -165,7 +166,16 @@ so that the stable surface stays small and honest.
 
 ## E4 — Durability terminology (P2)
 
-### RM-09 — Make recovery-guarantee claims precise (P2, open)
+Status: **done (2026-10-06)** — RM-09 implemented by
+`docs/decisions/CR-20261006-01-durability-guarantee-claims.md`: the placeholder
+`DurabilityRedundancyMode` enum (Repeat/XorParity/Fountain) and the write-nowhere/read-nowhere
+`DurabilityMatrixOptions.RedundancyMode` property were **removed** (nothing in-repo or CLI
+ever set them; no wire-format impact); XOR parity's actual guarantee (1 erasure per group,
+manifest SHA-256 proves correctness) documented in README + ARCHITECTURE §8.2 "Guarantee
+contract"; §12.3 reworded (new schemes land with implementation + tests + ADR, no mode
+selector). Regression test `Options_Expose_Only_The_Implemented_XorParity_Contract`.
+
+### RM-09 — Make recovery-guarantee claims precise (P2, done — CR-20261006-01)
 
 **Story:** As a user, I want documentation to distinguish implemented-and-proven vs
 implemented-but-experimental vs placeholder vs planned so that I don't infer guarantees the

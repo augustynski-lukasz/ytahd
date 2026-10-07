@@ -101,6 +101,32 @@ public class DurabilityMatrixTests
         Assert.Equal(7, DurabilityRecoveryPolicy.ResolveMinimumRequiredSymbols(options));
     }
 
+    /// <summary>
+    /// CR-20261006-01 (RM-09): the durability options describe only the implemented scheme.
+    /// The placeholder <c>DurabilityRedundancyMode</c> enum (Repeat/XorParity/Fountain) was
+    /// removed — it was write-nowhere/read-nowhere and invited fountain-code guarantee
+    /// inferences the transport cannot provide. This test pins the surviving contract:
+    /// options carry only live, tested knobs, and the recovery threshold is exactly
+    /// <c>GroupSize - ParitySymbolsPerGroup</c> (clamped to ≥ 1).
+    /// </summary>
+    [Fact]
+    public void Options_Expose_Only_The_Implemented_XorParity_Contract()
+    {
+        var options = new DurabilityMatrixOptions();
+
+        Assert.Equal(32, options.SymbolSize);
+        Assert.Equal(8, options.GroupSize);
+        Assert.Equal(1, options.ParitySymbolsPerGroup);
+
+        // The guarantee: with one parity symbol per group, exactly one missing symbol per
+        // group is recoverable (threshold = GroupSize - ParitySymbolsPerGroup, min 1).
+        Assert.Equal(7, options.ComputeRecoveryThreshold());
+
+        // Clamping: parity budget can never push the threshold below 1.
+        var overParity = new DurabilityMatrixOptions { GroupSize = 2, ParitySymbolsPerGroup = 5 };
+        Assert.Equal(1, overParity.ComputeRecoveryThreshold());
+    }
+
     [Fact]
     public void RecoveryPolicy_AllowsRecovery_WhenThresholdIsMet()
     {

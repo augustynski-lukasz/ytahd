@@ -757,6 +757,20 @@ flowchart TD
     F0 & F1 & F2 --> V[.mp4 via libx264]
 ```
 
+
+**Guarantee contract** (CR-20261006-01). What the durability layer actually provides:
+
+- **Implemented and proven** (real-codec tests): XOR parity with
+  `ParitySymbolsPerGroup` parity symbols per group - up to that many missing symbols per
+  group are reconstructed (threshold = `GroupSize  −  ParitySymbolsPerGroup`, clamped to >= 1;
+  CLI defaults: 1 erasure per group of 4). Per-symbol SHA-256 hashes reject corrupt
+  copies. Wholly-lost groups become zero-filled holes recorded in the loss map, and the
+  manifest SHA-256 **proves** whole-payload correctness (`integrity=passed/failed`) -
+  output is never silently accepted as correct.
+- **Not implemented** (extension paths only): fountain codes, Reed-Solomon, general
+  erasure coding. There is no selectable mode for them; a future scheme implements
+  `IDataDurabilityCodec` and lands with its own tests + ADR (see 12.3).
+
 ### 8.3 Integrity statuses
 
 | Status       | Meaning                                                                                  |
@@ -932,9 +946,11 @@ The header is versioned for exactly this purpose:
 ### 12.3 Adding a durability scheme
 
 `IDataDurabilityCodec` is the seam. A Reed–Solomon or fountain-code replacement
-implements the same interface; `DurabilityMatrixOptions.RedundancyMode` already
-anticipates modes beyond `XorParity`. Any new scheme must preserve: per-symbol hashes,
-hole-tolerant reconstruction with a loss map, and manifest-based whole-payload
+implements the same interface. There is deliberately **no mode selector** for unimplemented
+schemes (the placeholder `DurabilityRedundancyMode` enum was removed in CR-20261006-01):
+a new scheme lands **in the same commit as its implementation**, with tests and an ADR,
+and brings its own options if it needs them. Any new scheme must preserve: per-symbol
+hashes, hole-tolerant reconstruction with a loss map, and manifest-based whole-payload
 verification.
 
 ### 12.4 Versioning rules of thumb
