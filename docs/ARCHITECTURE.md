@@ -1032,6 +1032,12 @@ picture; the backlog is authoritative:
   default and the parallel path still buffers (perf measurement follow-up, ROADMAP).
 - **Manifest copies are identified by arrival order**, not by an explicit wire bit — a
   deferred protocol change (backlog).
+- **Backward compatibility across releases is regression-tested** (RM-12,
+  CR-20261008-01): `YTAHD.Tests/ReleaseFixtures/` holds packet fixtures produced by the
+  v0.1.1 / v0.1.3 / v0.2.0 encoders, and `ReleaseCompatibilityTests` decodes them with
+  the current code — including legacy v1 (51-byte header) packets via the hash-gated
+  wrapped-length path. Any wire-format change must keep these green or ship an ADR
+  declaring the break.
 - **Phase 4 + audio FSK cadence conflict:** Phase 4's 2-frame datagram span leaves no
   hold gap, so only the first boundary is audio-detectable (backlog).
 

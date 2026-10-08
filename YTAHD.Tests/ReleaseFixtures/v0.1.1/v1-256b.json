@@ -1,0 +1,14 @@
+{
+  "description": "YTAHD cross-release fixture (RM-12): encoded by the tagged release\u0027s own code, decoded by the current decoder.",
+  "tag": "v0.1.1",
+  "protocolVersion": 1,
+  "symbolSize": 32,
+  "groupSize": 4,
+  "paritySymbolsPerGroup": 1,
+  "payloadBytes": 256,
+  "payloadSha256": "2f3dedcc98287a3ee6898b44bc78b78e0b2b48bb4cba87fcb9a43bd583eb5a7b",
+  "packetCount": 10,
+  "dataPacketCount": 8,
+  "parityPacketCount": 2,
+  "manifestPacketCount": 0
+}
