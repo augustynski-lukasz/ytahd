@@ -53,6 +53,118 @@ namespace YTAHD.Core.Core
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
+        /// <summary>
+        /// Streaming, memory-bounded decode into a caller-supplied sink (RM-10, F-20260914-02).
+        /// Durability path: bytes land on the sink as their parity groups finalize, so peak
+        /// memory is O(one parity group + holes), not O(payload). Legacy path: identical to
+        /// <see cref="ProcessAsync"/> (batch assemble) since its early-stop already bounds work
+        /// and the plain path has no per-group schedule to flush against.
+        /// Returns the total bytes written to the sink.
+        /// </summary>
+        public async Task<long> ProcessToSinkAsync(Stream rgbStream, Stream outputSink, int expectedOutputBytes, int? audioDatagramCount = null, int totalVideoFrames = 0, IProgress<DecodeProgress>? progress = null, CancellationToken cancellationToken = default)
+        {
+            if (outputSink == null) throw new ArgumentNullException(nameof(outputSink));
+            if (!outputSink.CanWrite) throw new ArgumentException("Sink is not writable", nameof(outputSink));
+
+            if (!_useDurabilityMatrix)
+            {
+                var legacyPayload = await ProcessAsync(rgbStream, expectedOutputBytes, audioDatagramCount, totalVideoFrames, progress, cancellationToken);
+                await outputSink.WriteAsync(legacyPayload, 0, legacyPayload.Length, cancellationToken);
+                return legacyPayload.Length;
+            }
+
+            // Streaming durability path: feed strictly-valid packets to the incremental decoder
+            // as frames arrive. Frame reading/parsing mirrors ProcessAsync's serial loop so the
+            // metrics stay comparable.
+            var totalStopwatch = Stopwatch.StartNew();
+            double frameReadMilliseconds = 0d;
+            double packetDecodeMilliseconds = 0d;
+
+            if (rgbStream == null) throw new ArgumentNullException(nameof(rgbStream));
+            if (!rgbStream.CanRead) throw new ArgumentException("Stream is not readable", nameof(rgbStream));
+
+            var geometry = new ModulatorGeometry(_width, _height, _macroblockSize, FramePacket.HeaderBytes, BitsPerFrame: 0);
+            int borderWidth = _modulator.GetBorderWidth(geometry);
+            geometry = geometry with { BorderWidth = borderWidth };
+            int payloadBytesPerFrame = _modulator.GetPayloadBytesPerFrame(geometry);
+            if (payloadBytesPerFrame <= 0)
+                throw new InvalidOperationException("Frame capacity too small for metadata header and payload.");
+
+            int rowBytes = _width * 3;
+            int frameBytes = rowBytes * _height;
+            int blocksX = _width / _macroblockSize;
+            int blocksY = _height / _macroblockSize;
+            int bitsPerFrame = blocksX * blocksY;
+
+            long flushedBytes;
+            var frameBitDecoder = FrameBitDecoderFactory.CreateForModulator(_modulator);
+            byte[] frameBuf = new byte[frameBytes];
+            int framesSeen = 0;
+            int invalidPacketCount = 0;
+            var streaming = new StreamingDurabilityDecoder(_durabilityMatrixOptions!, (buffer, offset, count) => outputSink.Write(buffer, offset, count));
+
+            while (true)
+            {
+                var readStopwatch = Stopwatch.StartNew();
+                int read = 0;
+                while (read < frameBytes)
+                {
+                    int r = await rgbStream.ReadAsync(frameBuf, read, frameBytes - read, cancellationToken);
+                    if (r == 0) break;
+                    read += r;
+                }
+                readStopwatch.Stop();
+                frameReadMilliseconds += readStopwatch.Elapsed.TotalMilliseconds;
+
+                if (read < frameBytes) break;
+                framesSeen++;
+
+                if (frameBitDecoder.IsCanonicalFrameMemory(frameBuf, _width, _height, borderWidth))
+                {
+                    progress?.Report(new DecodeProgress(framesSeen, totalVideoFrames));
+                    continue;
+                }
+
+                var decodeStopwatch = Stopwatch.StartNew();
+                bool packetIsValid = DecoderEngine.TryReadDecodedPacket(frameBuf, _width, _height, _macroblockSize, rowBytes, frameBytes, bitsPerFrame, _modulator, out var packet);
+                decodeStopwatch.Stop();
+                packetDecodeMilliseconds += decodeStopwatch.Elapsed.TotalMilliseconds;
+
+                if (packetIsValid)
+                {
+                    streaming.Add(packet);
+                }
+                else
+                {
+                    invalidPacketCount++;
+                }
+
+                progress?.Report(new DecodeProgress(framesSeen, totalVideoFrames));
+            }
+
+            flushedBytes = streaming.Finalize(streaming.Manifest, out var integrityStatus, out var missingGroups);
+            _metrics = new DecodeMetrics
+            {
+                TotalFramesSeen = framesSeen,
+                InvalidPacketCount = invalidPacketCount,
+                Manifest = streaming.Manifest,
+                MissingDatagramIds = missingGroups,
+                IntegrityStatus = integrityStatus,
+                TotalDecodedPayloadBytes = (int)Math.Min(int.MaxValue, flushedBytes),
+                TotalFramesDecoded = framesSeen,
+                AudioDatagramCount = audioDatagramCount
+            };
+
+            totalStopwatch.Stop();
+            _metrics.TotalElapsedMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
+            _metrics.FrameReadMilliseconds = frameReadMilliseconds;
+            _metrics.PacketDecodeMilliseconds = packetDecodeMilliseconds;
+            LastDecodeMetrics = _metrics;
+            return flushedBytes;
+        }
+
+        private DecodeMetrics _metrics = new();
+
         public async Task<byte[]> ProcessAsync(Stream rgbStream, int expectedOutputBytes, int? audioDatagramCount = null, int totalVideoFrames = 0, IProgress<DecodeProgress>? progress = null, CancellationToken cancellationToken = default)
         {
             var totalStopwatch = Stopwatch.StartNew();

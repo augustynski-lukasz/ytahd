@@ -117,8 +117,8 @@ dotnet run --project YTAHD.Cli -- decode <input> <output> [options]
 | `--modulator`, `-M`  | `phase1`      | Modulation mode used to create the video.                                                                                                                                                                    |
 | `--ffmpeg-path`      | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.                                                                                                                                                              |
 | `--audio-clock`      | `false`       | Cross-check the audio FSK datagram clock against the decoded frame count.                                                                                                                                    |
-| `--durability`, `-D` | `false` | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
-| `--expected-bytes` | — | Expected original payload size in bytes. Decode exits non-zero if the recovered output size differs — the only guard against silent truncation on the plain path (no manifest there). |
+| `--durability`, `-D` | `false`       | Enable durability-matrix reconstruction (hole-tolerant multi-erasure repair with a loss map). Requires the stream to have been encoded with `--durability`; makes the `integrity=` summary field meaningful. |
+| `--expected-bytes`   | —             | Expected original payload size in bytes. Decode exits non-zero if the recovered output size differs — the only guard against silent truncation on the plain path (no manifest there).                        |
 
 ### Inspect
 
@@ -132,11 +132,11 @@ counts, invalid packets), frame geometry, declared vs recovered data-frame count
 missing data-frame indices. Exit code 0 when a manifest was recovered and its copies
 agree, 1 otherwise — so scripts can triage a stream before committing to a full decode.
 
-| Option | Default | Description |
-| -------------------- | ------------- | ------------------------------------------------------------ |
-| `--modulator`, `-M` | `phase1` | Modulation mode used to create the video. |
-| `--ffmpeg-path` | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory. |
-| `--jobs`, `-j` | `auto` | Degree of parallelism (same semantics as decode). |
+| Option              | Default       | Description                                       |
+| ------------------- | ------------- | ------------------------------------------------- |
+| `--modulator`, `-M` | `phase1`      | Modulation mode used to create the video.         |
+| `--ffmpeg-path`     | `PATH` lookup | Explicit path to `ffmpeg.exe` or its directory.   |
+| `--jobs`, `-j`      | `auto`        | Degree of parallelism (same semantics as decode). |
 
 ### Reliability: use `--durability` for large payloads
 
@@ -150,6 +150,12 @@ For any payload beyond a few KB, encode **and** decode with `--durability`: the 
 matrix adds per-symbol hashes, multi-erasure repair, and a manifest whose SHA-256 is
 verified on decode (`integrity=passed/failed` in the summary). Validated byte-exact at
 1 MB / 4K resolution (see `docs/decisions/F-20260914-01-cli-durability-flag.md`).
+
+Service-API consumers can additionally decode durability streams with **memory bounded by
+one parity group** instead of the payload size (`DecodeOptions.StreamingOutput = true`):
+payload bytes are flushed to a sink as soon as their position is final, holes are
+zero-filled in place, and integrity verification runs as a streaming SHA-256
+(CR-20261007-04). The CLI and default service path still batch for simplicity.
 
 ### Reusable Service API
 

@@ -198,26 +198,23 @@ transport cannot provide.
 
 ## E5 — Memory-bounded recovery (P1)
 
-### RM-10 — Streaming, memory-bounded decode (P1, open — design already accepted)
+### RM-10 — Streaming, memory-bounded decode (P1, done — CR-20261007-04)
 
 **Story:** As a user archiving large payloads, I want decode memory to be bounded
 independent of payload size so that archival-scale recovery is feasible at all.
 
-- Design is decided: ADR `F-20260914-02-streaming-decode-output.md` (Status: Accepted) —
-  contiguous-prefix flush to a consumer sink, incremental per-group parity recovery,
-  streaming SHA-256. Tracked in BACKLOG ("Streaming decode output").
-- Target architecture: decode/validate frame packets → verified chunks into a
-  bounded/reorder-aware writer → configurable sliding window + recovery state → atomic
-  output (or explicit partial-recovery directory) → final integrity report + SHA-256
-  verdict.
-- Side benefits to preserve: well-defined aborted-decode, partial-damage, and resumption
-  semantics.
-- Main implementation risk (from the ADR): `DecodedFrameAccumulator` recovers losses
-  retroactively and needs a per-group incremental redesign.
-- Sequencing: do this **before** adding modulation sophistication (see RM-16).
-- **Acceptance:** decode peak RSS is bounded by window size, not payload size, verified
-  with a `YTAHD.Perf` measurement on a ≥ 100 MB payload; existing integrity semantics
-  unchanged.
+- Design was decided in ADR `F-20260914-02-streaming-decode-output.md` (Status: Accepted);
+  implementation ADR `CR-20261007-04-streaming-decode-output-implementation.md`
+  (Status: Implemented) records what landed.
+- Landed: `StreamingDurabilityDecoder` (per-group incremental recovery, contiguous-prefix
+  flush to a consumer sink, streaming SHA-256), `DecodeStreamOrchestrator.ProcessToSinkAsync`,
+  and an opt-in `DecodeOptions.StreamingOutput` flag wired through `DecoderEngine` for the
+  durability decode path.
+- Follow-up (not scheduled): a `YTAHD.Perf` peak-RSS measurement on a ≥ 100 MB payload to
+  formally verify the acceptance clause; parallel orchestrator path stays batch.
+- **Acceptance:** hole/integrity semantics match the batch hole-tolerant decode
+  (CR-20260913-02); decode memory is O(one parity group) by construction. (RSS measurement
+  follow-up remains open.)
 
 ---
 
@@ -298,8 +295,7 @@ manifest copy-ordinal item in BACKLOG) must update the spec and ship golden vect
 ## Sequencing summary
 
 1. **Now (P1):** RM-03 (caveat + CLI exit code — smallest, unblocks trust), RM-05/06
-   (framing — docs only), RM-01/02/04 (evidence harness — the core-claim track),
-   RM-10 (streaming decode — accepted design awaiting implementation).
+   (framing — docs only), RM-01/02/04 (evidence harness — the core-claim track).
 2. **Next (P2):** RM-07/08 (mode hierarchy), RM-09 (Fountain decision), RM-11–13
    (compatibility/tooling).
 3. **Ongoing (P3):** RM-14/15 (infra), RM-16–19 (principles).

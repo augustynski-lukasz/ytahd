@@ -673,11 +673,11 @@ been validated. The model lives in `YTAHD.Cli/CliModeHierarchy.cs` (tested by
 `CliModeHierarchyTests`); the CLI's encode/decode summary reports the invocation's tier
 (`tier=`), and Tier-3 selections print a stderr warning.
 
-| Tier                   | Selections                                                                     | Evidence                                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| **1 — Reference**    | `phase1` modulator, `libx264`, `--durability` on encode+decode                 | Full suite; 2703-frame plain-path round trip (`F-20260914-03`); durability byte-exact at 1 MB/4K (`F-20260914-01`) |
+| Tier                 | Selections                                                                   | Evidence                                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **1 — Reference**    | `phase1` modulator, `libx264`, `--durability` on encode+decode               | Full suite; 2703-frame plain-path round trip (`F-20260914-03`); durability byte-exact at 1 MB/4K (`F-20260914-01`) |
 | **2 — Validated**    | `phase2`–`phase4` modulators, `h264_qsv`, `--audio-clock`, explicit `--jobs` | `ParallelPipelineRealCodecTests`, `QsvRealCodecTests`, audio-clock real-codec validation (`F-20260903-02`)         |
-| **3 — Experimental** | `h264_nvenc`, `h264_amf`, `--hwaccel` (non-`none`)                             | Capability probing only; never held to the durability bar (`CR-20260912-06`)                                       |
+| **3 — Experimental** | `h264_nvenc`, `h264_amf`, `--hwaccel` (non-`none`)                           | Capability probing only; never held to the durability bar (`CR-20260912-06`)                                       |
 
 Rules:
 
@@ -700,24 +700,24 @@ and its copies agree, `1` otherwise.
 
 JSON schema (camelCase keys):
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `inputVideo` | string | Path as inspected. |
-| `width` / `height` / `fps` | int | Container geometry probed by ffprobe (0 when probing failed). |
-| `totalVideoFrames` | int | Total video frames in the container (0 when probing failed). |
-| `modulatorId` | string | Modulator class used to decode the packets. |
-| `packetCount` | int | Strictly-valid packets recovered (data + parity + manifest). |
-| `dataPacketCount` / `parityPacketCount` / `manifestPacketCount` | int | Per-type packet counts. |
-| `invalidPacketCount` | int | Frames that produced no valid packet (lossy-drift or loss candidates). |
-| `canonicalFrameCount` | int | Canonical separator frames seen (phase4 datagram boundaries). |
-| `framesSeen` | int | Total video frames read from the container. |
-| `declaredTotalDataFrames` | int | Protocol-declared total from packet headers (0 when none seen). |
-| `distinctDataFrameIndices` | int | Distinct data frame indices recovered. |
-| `missingDataFrameIndices` | int[] | Indices missing between 0 and the highest recovered index. |
-| `manifest` | object \| null | The reconciled stream manifest (same fields as §6). |
-| `manifestCopiesAgree` | bool \| null | Whether start/end manifest copies agree (null when < 2 copies). |
-| `payloadBytesPerFrame` | int | Per-frame payload capacity implied by the geometry. |
-| `looksLikeYtahdStream` | bool | True when at least one packet parsed strictly. |
+| Field                                                           | Type           | Meaning                                                                |
+| --------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------- |
+| `inputVideo`                                                    | string         | Path as inspected.                                                     |
+| `width` / `height` / `fps`                                      | int            | Container geometry probed by ffprobe (0 when probing failed).          |
+| `totalVideoFrames`                                              | int            | Total video frames in the container (0 when probing failed).           |
+| `modulatorId`                                                   | string         | Modulator class used to decode the packets.                            |
+| `packetCount`                                                   | int            | Strictly-valid packets recovered (data + parity + manifest).           |
+| `dataPacketCount` / `parityPacketCount` / `manifestPacketCount` | int            | Per-type packet counts.                                                |
+| `invalidPacketCount`                                            | int            | Frames that produced no valid packet (lossy-drift or loss candidates). |
+| `canonicalFrameCount`                                           | int            | Canonical separator frames seen (phase4 datagram boundaries).          |
+| `framesSeen`                                                    | int            | Total video frames read from the container.                            |
+| `declaredTotalDataFrames`                                       | int            | Protocol-declared total from packet headers (0 when none seen).        |
+| `distinctDataFrameIndices`                                      | int            | Distinct data frame indices recovered.                                 |
+| `missingDataFrameIndices`                                       | int[]          | Indices missing between 0 and the highest recovered index.             |
+| `manifest`                                                      | object \| null | The reconciled stream manifest (same fields as §6).                    |
+| `manifestCopiesAgree`                                           | bool \| null   | Whether start/end manifest copies agree (null when < 2 copies).        |
+| `payloadBytesPerFrame`                                          | int            | Per-frame payload capacity implied by the geometry.                    |
+| `looksLikeYtahdStream`                                          | bool           | True when at least one packet parsed strictly.                         |
 
 Manifest reconciliation follows the durability decode exactly (§6): each copy's chunks
 are reassembled separately and conflicting copies are reported via
@@ -791,7 +791,6 @@ flowchart TD
     F0 & F1 & F2 --> V[.mp4 via libx264]
 ```
 
-
 **Guarantee contract** (CR-20261006-01). What the durability layer actually provides:
 
 - **Implemented and proven** (real-codec tests): XOR parity with
@@ -804,6 +803,25 @@ flowchart TD
 - **Not implemented** (extension paths only): fountain codes, Reed-Solomon, general
   erasure coding. There is no selectable mode for them; a future scheme implements
   `IDataDurabilityCodec` and lands with its own tests + ADR (see 12.3).
+
+**Streaming decode (RM-10, CR-20261007-04).** The batch decode above assembles the whole
+payload in memory; the streaming decoder (`StreamingDurabilityDecoder`, opt-in via
+`DecodeOptions.StreamingOutput`, driven by `DecodeStreamOrchestrator.ProcessToSinkAsync`)
+instead flushes every payload byte to a sink as soon as its position is final:
+
+- A group flushes in symbol order when all data symbols arrive, or after XOR-repairing a
+  single missing symbol from parity. Peak memory is O(one parity group), not O(payload).
+- Hole semantics are identical to the batch decode (CR-20260913-02): a group beyond the
+  XOR budget becomes a zero-filled hole in `MissingGroups`, written immediately in payload
+  order (parity is the group's last packet, so the verdict is final); a **wholly-absent**
+  group (truncated tail — its parity never arrives) is materialized at finalize from the
+  manifest schedule. Duplicate physical copies of already-resolved groups' packets are
+  ignored (the encoder writes every logical packet 3× physically).
+- In-order group arrival is required and asserted (loud `InvalidDataException` otherwise);
+  manifest reconciliation and conflicting-copy failure match the batch path exactly; the
+  integrity verdict is a streaming SHA-256 over all flushed bytes, including hole zeros.
+- Scope: serial durability path only; the parallel orchestrator and plain decodes remain
+  batch, and default behavior is unchanged.
 
 ### 8.3 Integrity statuses
 
@@ -1008,9 +1026,10 @@ picture; the backlog is authoritative:
   accumulate; 1 MB phase2 payloads have thrown, 256 KB has silently truncated. The
   durability matrix is the supported path for large payloads (ADR
   `F-20260914-03-long-stream-regression-coverage.md`).
-- **Decode assembles the whole payload in memory.** Streaming, contiguous-prefix output
-  is designed (ADR `F-20260914-02-streaming-decode-output.md`, Accepted) but not
-  implemented.
+- **Batch decode assembles the whole payload in memory.** The durability decode has a
+  streaming, memory-bounded output path (see §8.2, `DecodeOptions.StreamingOutput`,
+  CR-20261007-04); it is opt-in and serial-path only — the batch assembly remains the
+  default and the parallel path still buffers (perf measurement follow-up, ROADMAP).
 - **Manifest copies are identified by arrival order**, not by an explicit wire bit — a
   deferred protocol change (backlog).
 - **Phase 4 + audio FSK cadence conflict:** Phase 4's 2-frame datagram span leaves no

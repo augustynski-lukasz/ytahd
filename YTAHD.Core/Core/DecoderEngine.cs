@@ -32,6 +32,8 @@ namespace YTAHD.Core.Core
         private readonly HardwareAcceleration _hardwareAcceleration;
         /// <summary>Resolved worker count from <see cref="ParallelismPolicy"/>; <c>1</c> selects the serial path.</summary>
         private readonly int _maxDegreeOfParallelism;
+        /// <summary>RM-10: stream the output file incrementally instead of assembling it in memory.</summary>
+        private readonly bool _streamingOutput;
 
         public DecodeMetrics LastDecodeMetrics { get; private set; } = new();
 
@@ -60,6 +62,7 @@ namespace YTAHD.Core.Core
             _progress = options is DecodeOptions decodeOptions ? decodeOptions.Progress : null;
             _hardwareAcceleration = options.HardwareAcceleration;
             _maxDegreeOfParallelism = ParallelismPolicy.Resolve(options.MaxDegreeOfParallelism);
+            _streamingOutput = options is DecodeOptions decodeOptions2 && decodeOptions2.StreamingOutput;
         }
 
         private static IModulator NormalizeModulator(IModulator modulator, int macroblockSize)
@@ -298,9 +301,21 @@ namespace YTAHD.Core.Core
             // stdout is wrapped rather than read directly: a pipe read cannot complete on an IO completion
             // port, so awaiting the raw pipe parks a thread-pool thread for the whole decode and enough
             // concurrent decodes then starve the pool the pipeline itself runs on.
+            // RM-10 (F-20260914-02): the file output streams incrementally when the durability
+            // matrix is on, so a large payload never materializes in memory.
             using (var rgbStream = new ChildPipeStream(process.StandardOutput.BaseStream))
             {
-                await DecodeFromRgbStreamAsync(rgbStream, width, height, _macroblockSize, outputFile, audioDatagramCount, totalVideoFrames, cancellationToken);
+                if (_useDurabilityMatrix && _streamingOutput)
+                {
+                    await using (var outputSink = new FileStream(outputFile, FileMode.Create, FileAccess.Write, FileShare.Read))
+                    {
+                        await DecodeToSinkAsync(rgbStream, width, height, _macroblockSize, outputSink, audioDatagramCount, totalVideoFrames, cancellationToken);
+                    }
+                }
+                else
+                {
+                    await DecodeFromRgbStreamAsync(rgbStream, width, height, _macroblockSize, outputFile, audioDatagramCount, totalVideoFrames, cancellationToken);
+                }
             }
 
             await process.WaitForExitAsync();
@@ -326,6 +341,19 @@ namespace YTAHD.Core.Core
             var output = await orchestrator.ProcessAsync(rgbStream, 0, audioDatagramCount, totalVideoFrames, _progress, cancellationToken);
             LastDecodeMetrics = orchestrator.LastDecodeMetrics;
             await File.WriteAllBytesAsync(outputFile, output);
+        }
+
+        /// <summary>
+        /// Streaming decode into a caller-supplied sink (RM-10, F-20260914-02): durability-path
+        /// bytes are written as their groups finalize, so peak memory is bounded by the group
+        /// size rather than the payload size. Metrics report the same shape as a batch decode.
+        /// </summary>
+        public async Task<long> DecodeToSinkAsync(Stream rgbStream, int width, int height, int macroblockSize, Stream outputSink, int? audioDatagramCount = null, int totalVideoFrames = 0, CancellationToken cancellationToken = default)
+        {
+            var orchestrator = new DecodeStreamOrchestrator(_modulator, width, height, macroblockSize, _useDurabilityMatrix, _durabilityMatrixOptions, _maxDegreeOfParallelism);
+            var flushedBytes = await orchestrator.ProcessToSinkAsync(rgbStream, outputSink, 0, audioDatagramCount, totalVideoFrames, _progress, cancellationToken);
+            LastDecodeMetrics = orchestrator.LastDecodeMetrics;
+            return flushedBytes;
         }
 
         /// <summary>
