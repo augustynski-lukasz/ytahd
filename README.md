@@ -40,6 +40,24 @@ Do not use YTAHD for any of the following — the channel cannot support these g
 - `YTAHD.Tests` - unit/integration tests for core functionality
 - `YTAHD.Perf` - performance and overhead analysis tool for comparing algorithms
 
+## Reproducible FFmpeg test environment (container)
+
+The real-codec tests depend on the local FFmpeg build. `Dockerfile.test` pins .NET 8
+and FFmpeg 6.1.2-3 (Debian bookworm) so the FFmpeg-dependent suite runs identically
+across machines:
+
+```bash
+docker build -t ytahd-test -f Dockerfile.test .
+docker run --rm -t ytahd-test                                                # full suite
+docker run --rm -t ytahd-test dotnet test YTAHD.Tests/YTAHD.Tests.csproj \
+    --configuration Release --no-build \
+    --filter "FullyQualifiedName~CodecIntegrationTests"                      # one class
+```
+
+Notes: GPU/QSV tests probe the encoder and self-skip in a container (no GPU device);
+timing inside the container is not comparable to native runs — keep `YTAHD.Perf`
+measurements on the host. See `docs/decisions/CR-20261009-02-containerized-test-environment.md`.
+
 ## CLI Usage
 
 Run commands from the repository root. The CLI resolves `ffmpeg` from `PATH` by default.

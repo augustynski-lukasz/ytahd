@@ -1,0 +1,9 @@
+.YTAHD bin/obj build outputs and local artifacts
+bin/
+obj/
+*.user
+.vs/
+.git/
+
+# Perf artifacts are host-machine specific — never bake them into the test image
+perf-*.json

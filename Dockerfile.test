@@ -1,0 +1,50 @@
+# RM-14: containerized, reproducible FFmpeg test environment.
+#
+# Pinned stack:
+#   - .NET SDK 8.0 (bookworm-slim) — matches the repo's net8.0 target.
+#   - FFmpeg 6.1.2-3 (Debian 12 stable package, jammy-22.04 base pins its own ffmpeg
+#     differently — do not mix). Pinning the distro package keeps real-codec results
+#     reproducible across machines and over time; apt upgrading the base image can
+#     change the codec build, so treat a rebuilt image as a NEW environment: re-baseline
+#     perf numbers (see scripts/check-perf-regression.ps1).
+#   - libfontconfig1/libfreetype6 — native deps for System.Drawing-common text rendering
+#     (same packages the GitHub Actions workflow installs).
+#
+# Purpose: FFmpeg-dependent test scenarios (the real-codec subset) run identically
+# everywhere. Timing/perf runs inside the container are NOT comparable to native runs —
+# keep YTAHD.Perf measurements on the host (docs/decisions/CR-20261009-02).
+#
+# Build:  docker build -t ytahd-test -f Dockerfile.test .
+# Run:    docker run --rm -t ytahd-test
+# Subset: docker run --rm -t ytahd-test dotnet test --configuration Release --no-build \
+#           --filter "FullyQualifiedName~CodecIntegrationTests"
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim
+
+# FFmpeg 6.1.2-3 is the Debian 12 (bookworm) stable package version; the hold keeps an
+# apt-get upgrade inside the image lifecycle from silently changing the codec baseline.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg=7:6.1.2-3 \
+        libfontconfig1 \
+        libfreetype6 \
+    && apt-mark hold ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo
+
+# Restore first so source edits don't invalidate the package layer.
+COPY YTAHD.Core/YTAHD.Core.csproj YTAHD.Core/
+COPY YTAHD.Cli/YTAHD.Cli.csproj YTAHD.Cli/
+COPY YTAHD.Tests/YTAHD.Tests.csproj YTAHD.Tests/
+RUN dotnet restore YTAHD.Tests/YTAHD.Tests.csproj
+
+COPY YTAHD.Core/ YTAHD.Core/
+COPY YTAHD.Cli/ YTAHD.Cli/
+COPY YTAHD.Tests/ YTAHD.Tests/
+RUN dotnet build YTAHD.Tests/YTAHD.Tests.csproj --configuration Release --no-restore
+
+# Default: the full suite with real FFmpeg on PATH (TestFfmpeg falls through to `ffmpeg`).
+# QSV/GPU tests probe the encoder and self-skip when the device is absent (a container
+# has none); hwaccel decode tests skip when the platform lacks support.
+CMD ["dotnet", "test", "YTAHD.Tests/YTAHD.Tests.csproj", "--configuration", "Release", "--no-build", "--logger", "console;verbosity=minimal"]

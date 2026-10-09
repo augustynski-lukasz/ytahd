@@ -247,13 +247,20 @@ loss/recovery statistics, manifest hash) so that streams can be triaged programm
 
 - **Acceptance:** JSON schema documented; CLI emits it for any YTAHD-encoded video.
 
-### RM-14 — Containerized reproducible FFmpeg test environment (P3, open)
+### RM-14 — Containerized reproducible FFmpeg test environment (P3, done — CR-20261009-02)
 
 **Story:** As a contributor, I want a container with pinned FFmpeg for FFmpeg-dependent
 scenarios so that results are reproducible across machines.
 
 - Keep native performance tests separate (container timing is not comparable).
 - **Acceptance:** documented container run of the real-codec test subset.
+- Landed: `Dockerfile.test` (`.NET 8 SDK` + FFmpeg 6.1.2-3 pinned with `apt-mark hold`,
+  native deps matching CI), `.dockerignore` (perf artifacts stay host-side). Full suite
+  via `docker run --rm -t ytahd-test`; per-class via `--filter`. GPU/hwaccel tests
+  self-skip by their existing encoder probes; `YTAHD.Perf` stays native per the story.
+  CI wiring deliberately deferred (recorded in the ADR). Local Docker was unavailable for
+  an end-to-end `docker build` — first build on a Docker-capable machine is the
+  remaining verification (also in the ADR).
 
 ### RM-15 — Benchmark regression guardrails (P3, done — CR-20261009-01)
 
@@ -307,7 +314,7 @@ manifest copy-ordinal item in BACKLOG) must update the spec and ship golden vect
    (framing — docs only), RM-01/02/04 (evidence harness — the core-claim track).
 2. **Next (P2):** RM-07/08 (mode hierarchy), RM-09 (Fountain decision), RM-11–13
    (compatibility/tooling).
-3. **Ongoing (P3):** RM-14 (infra), RM-16–19 (principles).
+3. **Ongoing (P3):** RM-16–19 (principles).
 
 Code-level refactoring (Workstream G, Review 1) runs on its own track per
 `docs/REVIEW.md`; wire-format work (manifest copy ordinal) should ride with the next
