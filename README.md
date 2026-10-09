@@ -482,6 +482,28 @@ dotnet run --project YTAHD.Perf\YTAHD.Perf.csproj -- --payload-bytes 52428800 --
 - `--algorithm` `repeat` or `xor-parity`
 - `--compare` compare `repeat(x1)`, `repeat(xN)`, and `xor-parity`
 
+### Benchmark regression guardrail (RM-15)
+
+The `bench` mode can record machine-readable results, and
+`scripts/check-perf-regression.ps1` compares a fresh run against a stored baseline:
+
+```powershell
+# record a baseline once per environment, commit it
+dotnet run --project YTAHD.Perf -- bench --json perf-baseline.json
+
+# after a change, re-run with the same configuration and check
+dotnet run --project YTAHD.Perf -- bench --json perf-current.json
+powershell -File scripts\check-perf-regression.ps1 -Baseline perf-baseline.json -Current perf-current.json
+```
+
+Policy: fail when encode/decode throughput (grouped by modulator + payload + jobs,
+summed across repeats) drops more than **20%** on serial runs or **35%** on parallel
+runs (FFmpeg thread scheduling is the noisiest axis), or more than **10%** on the
+aggregate mean (catches a small uniform slowdown that slips under every per-run gate).
+Comparisons across different machines/core counts are rejected — re-baseline instead.
+Exit codes: 0 pass, 1 regression, 2 usage error. See ADR
+`docs/decisions/CR-20261009-01-benchmark-regression-guardrails.md`.
+
 ## License
 
 Licensed under the [MIT License](LICENSE).

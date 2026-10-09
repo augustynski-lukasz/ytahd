@@ -255,7 +255,7 @@ scenarios so that results are reproducible across machines.
 - Keep native performance tests separate (container timing is not comparable).
 - **Acceptance:** documented container run of the real-codec test subset.
 
-### RM-15 — Benchmark regression guardrails (P3, open)
+### RM-15 — Benchmark regression guardrails (P3, done — CR-20261009-01)
 
 **Story:** As a maintainer, I want CI guardrails on benchmark results that detect material
 regressions without fragile fixed-time assertions.
@@ -263,6 +263,13 @@ regressions without fragile fixed-time assertions.
 - Build on the existing `YTAHD.Perf --json` output format.
 - **Acceptance:** a defined threshold policy (e.g. % regression vs stored baseline) and a
   check that can run locally/CI.
+- Landed: `scripts/check-perf-regression.ps1` — compares a fresh `YTAHD.Perf bench
+  --json` result against a stored baseline; fails on >20% serial / >35% parallel
+  throughput loss per run key (modulator+payload+jobs, repeats summed) or >10% aggregate
+  mean loss; rejects cross-environment comparisons (core-count mismatch) to force
+  re-baselining. Thresholds calibrated on the measured G1 noise floor. Local/CI-runnable
+  via exit codes; CI wiring itself is deferred (shared runners aren't throughput-
+  comparable to committed baselines — recorded in the ADR).
 
 ---
 
@@ -300,7 +307,7 @@ manifest copy-ordinal item in BACKLOG) must update the spec and ship golden vect
    (framing — docs only), RM-01/02/04 (evidence harness — the core-claim track).
 2. **Next (P2):** RM-07/08 (mode hierarchy), RM-09 (Fountain decision), RM-11–13
    (compatibility/tooling).
-3. **Ongoing (P3):** RM-14/15 (infra), RM-16–19 (principles).
+3. **Ongoing (P3):** RM-14 (infra), RM-16–19 (principles).
 
 Code-level refactoring (Workstream G, Review 1) runs on its own track per
 `docs/REVIEW.md`; wire-format work (manifest copy ordinal) should ride with the next
