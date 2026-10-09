@@ -272,8 +272,7 @@ static void Emit(
 
 New-Item -ItemType Directory -Force $fixturesRoot | Out-Null
 
-foreach ($tag in $Tags)
-{
+foreach ($tag in $Tags) {
     Write-Host "=== $tag ==="
     $genDir = Join-Path $env:TEMP "ytahd-relfix-$tag"
     $coreDir = Join-Path $genDir 'core'
@@ -283,13 +282,11 @@ foreach ($tag in $Tags)
     New-Item -ItemType Directory -Force $coreDir | Out-Null
     New-Item -ItemType Directory -Force $outDir | Out-Null
 
-    foreach ($f in $coreFiles)
-    {
+    foreach ($f in $coreFiles) {
         $src = "YTAHD.Core/Core/$f"
         $dst = Join-Path $coreDir $f
         $exists = & git ls-tree "${tag}" -- "YTAHD.Core/Core/$f"
-        if ([string]::IsNullOrWhiteSpace("$exists"))
-        {
+        if ([string]::IsNullOrWhiteSpace("$exists")) {
             # Optional file (e.g. StreamManifest.cs predates v0.2.0): absent at this tag.
             Write-Host "  ${tag}: skipping $f (not present at this tag)"
             continue

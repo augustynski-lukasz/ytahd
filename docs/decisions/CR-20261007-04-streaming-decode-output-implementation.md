@@ -3,7 +3,7 @@
 **Date:** 2026-10-08
 **Status:** Implemented
 **Area:** `YTAHD.Core/Core/StreamingDurabilityDecoder.cs` (new),
-`YTAHD.Core/Core/DecodeStreamOrchestrator.cs` (`ProcessToSinkAsync`), 
+`YTAHD.Core/Core/DecodeStreamOrchestrator.cs` (`ProcessToSinkAsync`),
 `YTAHD.Core/Core/DecoderEngine.cs`, `YTAHD.Core/Application/DecodeOptions.cs`,
 `YTAHD.Tests/StreamingDurabilityDecoderTests.cs` (new)
 
@@ -81,12 +81,12 @@ Two stacked defects, one masking the other:
    `Add` buffered every packet; after a group flushed, the 2nd/3rd physical copies of its
    packets arrived and rebuilt the `GroupBuffer`, so the duplicate parity copy saw >1
    "missing" symbols → `MarkHole` fired for every group. This masked defect 2 because the
-   hole path was at least *reached*.
+   hole path was at least _reached_.
 2. **Wholly-absent tail groups never produced a hole** (test 3's `missing=[]`): `MarkHole`
-  is only reachable from `TryFlushGroup`, which requires the group's parity symbol to have
-  arrived. A truncated tail group (dropped with its parity) never entered `TryFlushGroup`,
-  and `Finalize` computed `integrity=Failed` from the short `_flushedBytes` but wrote no
-  hole and reported no missing groups.
+   is only reachable from `TryFlushGroup`, which requires the group's parity symbol to have
+   arrived. A truncated tail group (dropped with its parity) never entered `TryFlushGroup`,
+   and `Finalize` computed `integrity=Failed` from the short `_flushedBytes` but wrote no
+   hole and reported no missing groups.
 
 ## Resolution
 
@@ -105,10 +105,10 @@ Two stacked defects, one masking the other:
   rewrite must add resolved-state tracking or duplicate copies masquerade as fresh losses.
 - **A loss detector that requires the victim to announce itself can't see whole-group
   losses.** Parity-arrival was used as the "verdict is final" trigger, but a group that
-  loses *everything* (including parity) never triggers — only the manifest schedule at
+  loses _everything_ (including parity) never triggers — only the manifest schedule at
   finalize can size that hole. Both detectors are needed: parity-arrival for partial
   groups, manifest-clamp at finalize for wholly-absent ones.
-- **Test order mattered**: fixing defect 1 first made test 3 fail *differently* (silent
+- **Test order mattered**: fixing defect 1 first made test 3 fail _differently_ (silent
   `missing=[]` instead of bogus holes), which is what localized defect 2. Driving one test
   to green at a time kept the two root causes separable.
 
