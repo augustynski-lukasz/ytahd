@@ -1,6 +1,10 @@
-.YTAHD bin/obj build outputs and local artifacts
-bin/
-obj/
+.YTAHD bin/obj build outputs and local artifacts — patterns are rooted at repo root,
+# so the leading **/ is required to also exclude every project's nested bin/obj. Without
+# it, Windows-built project.assets.json leaks into the image and the container build
+# fails with MSB4018 (NuGet tries to resolve the Windows fallback folder
+# 'C:\Program Files (x86)\Microsoft Visual Studio\Shared\NuGetPackages').
+**/bin/
+**/obj/
 *.user
 .vs/
 .git/

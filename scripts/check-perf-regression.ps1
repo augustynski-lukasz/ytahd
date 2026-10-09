@@ -48,7 +48,8 @@ if (-not (Test-Path $Current)) { Write-Host "ERROR: Current file not found: $Cur
 try {
     $base = Get-Content $Baseline -Raw | ConvertFrom-Json
     $curr = Get-Content $Current -Raw | ConvertFrom-Json
-} catch {
+}
+catch {
     Write-Error "Failed to parse input JSON: $_"
     exit 2
 }

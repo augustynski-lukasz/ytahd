@@ -254,13 +254,18 @@ scenarios so that results are reproducible across machines.
 
 - Keep native performance tests separate (container timing is not comparable).
 - **Acceptance:** documented container run of the real-codec test subset.
-- Landed: `Dockerfile.test` (`.NET 8 SDK` + FFmpeg 6.1.2-3 pinned with `apt-mark hold`,
-  native deps matching CI), `.dockerignore` (perf artifacts stay host-side). Full suite
-  via `docker run --rm -t ytahd-test`; per-class via `--filter`. GPU/hwaccel tests
-  self-skip by their existing encoder probes; `YTAHD.Perf` stays native per the story.
-  CI wiring deliberately deferred (recorded in the ADR). Local Docker was unavailable for
-  an end-to-end `docker build` — first build on a Docker-capable machine is the
-  remaining verification (also in the ADR).
+- Landed: `Dockerfile.test` (`.NET 8 SDK` + FFmpeg 5.1.9-0+deb12u1 pinned with
+  `apt-mark hold`, native deps matching CI), `.dockerignore` (source-only image inputs;
+  perf artifacts stay host-side). Full suite via `docker run --rm -t ytahd-test`;
+  per-class via `--filter`. GPU/hwaccel tests self-skip by their existing encoder probes;
+  `YTAHD.Perf` stays native per the story. CI wiring deliberately deferred (in the ADR).
+- **Verified end-to-end 2026-10-10 (Docker Engine 29.9.0, WSL Ubuntu 24.04): full suite
+  390/390 in the container** with FFmpeg 5.1.9. The first real build surfaced and fixed
+  two Windows-only-invisible defects: a `.dockerignore` root-anchored pattern leak
+  (nested `obj/` shipped Windows `project.assets.json` → MSB4018 NuGet fallback-folder
+  error) and a C# 13-only `Span` local in `Phase4DurabilityDiscriminatorTests` that the
+  pinned .NET 8 SDK (C# 12) rejects (CS8652). Both detailed in the ADR's debugging
+  sections.
 
 ### RM-15 — Benchmark regression guardrails (P3, done — CR-20261009-01)
 
@@ -271,7 +276,7 @@ regressions without fragile fixed-time assertions.
 - **Acceptance:** a defined threshold policy (e.g. % regression vs stored baseline) and a
   check that can run locally/CI.
 - Landed: `scripts/check-perf-regression.ps1` — compares a fresh `YTAHD.Perf bench
-  --json` result against a stored baseline; fails on >20% serial / >35% parallel
+--json` result against a stored baseline; fails on >20% serial / >35% parallel
   throughput loss per run key (modulator+payload+jobs, repeats summed) or >10% aggregate
   mean loss; rejects cross-environment comparisons (core-count mismatch) to force
   re-baselining. Thresholds calibrated on the measured G1 noise floor. Local/CI-runnable

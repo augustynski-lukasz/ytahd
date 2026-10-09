@@ -2,11 +2,10 @@
 #
 # Pinned stack:
 #   - .NET SDK 8.0 (bookworm-slim) — matches the repo's net8.0 target.
-#   - FFmpeg 6.1.2-3 (Debian 12 stable package, jammy-22.04 base pins its own ffmpeg
-#     differently — do not mix). Pinning the distro package keeps real-codec results
-#     reproducible across machines and over time; apt upgrading the base image can
-#     change the codec build, so treat a rebuilt image as a NEW environment: re-baseline
-#     perf numbers (see scripts/check-perf-regression.ps1).
+# - FFmpeg 5.1.9-0+deb12u1 (Debian 12 stable package). Pinning the distro package keeps
+#   real-codec results reproducible across machines and over time; apt upgrading the
+#   base image can change the codec build, so treat a rebuilt image as a NEW environment:
+#   re-baseline perf numbers (see scripts/check-perf-regression.ps1).
 #   - libfontconfig1/libfreetype6 — native deps for System.Drawing-common text rendering
 #     (same packages the GitHub Actions workflow installs).
 #
@@ -21,13 +20,14 @@
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim
 
-# FFmpeg 6.1.2-3 is the Debian 12 (bookworm) stable package version; the hold keeps an
-# apt-get upgrade inside the image lifecycle from silently changing the codec baseline.
+# FFmpeg 5.1.9 is the Debian 12 (bookworm) stable package version (verified via
+# apt-cache policy in the base image); the hold keeps an apt-get upgrade inside the
+# image lifecycle from silently changing the codec baseline.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ffmpeg=7:6.1.2-3 \
-        libfontconfig1 \
-        libfreetype6 \
+    ffmpeg=7:5.1.9-0+deb12u1 \
+    libfontconfig1 \
+    libfreetype6 \
     && apt-mark hold ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

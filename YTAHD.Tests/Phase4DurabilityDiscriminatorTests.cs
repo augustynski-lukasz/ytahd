@@ -185,8 +185,9 @@ public class Phase4DurabilityDiscriminatorTests
                         }
                         else
                         {
-                            var expected = pkt.AsSpan(0, Math.Min(pkt.Length, 160));
-                            var hex = System.Convert.ToHexString(expected.Slice(0, 48));
+                            // Inline span use only: a Span<byte> local inside this async method
+                            // requires C# 13; the container's pinned .NET 8 SDK (C# 12) rejects it.
+                            var hex = System.Convert.ToHexString(pkt.AsSpan(0, Math.Min(48, pkt.Length)));
                             reason = $"tolerance-ok-but-rejected(type={ft2} totalFrames={tdf2} declaredLen={pl2} bodyLen={body2.Length} hex0-48={hex})";
                         }
                         walk.Append($"f{f}:INVALID[{reason}] ");

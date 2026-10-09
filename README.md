@@ -43,8 +43,9 @@ Do not use YTAHD for any of the following — the channel cannot support these g
 ## Reproducible FFmpeg test environment (container)
 
 The real-codec tests depend on the local FFmpeg build. `Dockerfile.test` pins .NET 8
-and FFmpeg 6.1.2-3 (Debian bookworm) so the FFmpeg-dependent suite runs identically
-across machines:
+and FFmpeg 5.1.9-0+deb12u1 (Debian bookworm) so the FFmpeg-dependent suite runs
+identically across machines. Verified end-to-end: full suite 390/390 inside the
+container.
 
 ```bash
 docker build -t ytahd-test -f Dockerfile.test .
