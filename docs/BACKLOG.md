@@ -2,6 +2,24 @@
 
 Open items only. When an item is resolved, delete it from here and add an ADR in `docs/decisions/`.
 
+## Migrate to .NET 10
+
+The solution targets `net8.0` across all projects (Core, Cli, Tests, Perf, probe). .NET 10
+is the current LTS (support window runs to Nov 2028); .NET 8 LTS support ends Nov 2026, so
+this migration should land before then. Scope:
+
+- Bump `TargetFramework` in all five csproj files + CI (`dotnet-test.yml` `dotnet-version`)
+  + `Dockerfile.test` base image (`mcr.microsoft.com/dotnet/sdk:10.0-bookworm-slim`) +
+  README environment mentions.
+- Verify the full suite on real FFmpeg in the pinned container (per RM-14 the container is
+  the canonical reproduction environment; 390/390 is the current baseline there).
+- Check `System.CommandLine` (beta4 on `YTAHD.Cli`) for breaking changes — a beta
+  dependency is the most likely friction point.
+- Re-baseline perf afterwards (per `CR-20261009-01`, a runtime change is a new environment;
+  run `YTAHD.Perf bench --json` and compare with `scripts/check-perf-regression.ps1`).
+- RM-11/RM-12 golden vectors and release fixtures must stay green (they pin wire format,
+  not runtime — but the compat tests are the safety net if anything shifts).
+
 ## Manifest copy identity in the wire format (deferred protocol change)
 
 From Review 1 finding F6: manifest chunk reassembly in
